@@ -11,7 +11,7 @@ import { HUD } from "../../ui/components/HUD";
  */
 export function GameCanvas() {
   return (
-    <div className="w-full h-full">
+    <div className="absolute inset-0 w-full h-full">
       <KeyboardControls
         map={[
           { name: "forward", keys: ["w", "ArrowUp"] },
@@ -25,7 +25,7 @@ export function GameCanvas() {
           { name: "reload", keys: ["r"] },
         ]}
       >
-        <Canvas shadows camera={{ position: [0, 1.6, 0], fov: 70 }}>
+        <Canvas shadows camera={{ position: [0, 1.6, 0], fov: 75 }} style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}>
           {/* Environment */}
           <ambientLight intensity={0.3} />
           <directionalLight

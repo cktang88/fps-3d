@@ -49,22 +49,44 @@ export const inputState: InputState = {
 };
 
 // Event handlers defined outside the system
-const handleKeyDown = (event: KeyboardEvent): void => {
-  // Update key state
-  inputState.keys[event.key] = true;
-
+function handleKeyDown(event: KeyboardEvent) {
   // Prevent default browser behavior for certain keys
-  if (
-    [" ", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)
-  ) {
+  if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "w", "a", "s", "d"].includes(event.code)) {
     event.preventDefault();
   }
-};
+  
+  // Store key state
+  inputState.keys[event.key.toLowerCase()] = true;
+  
+  // For space key which can't be stored as a string
+  if (event.code === "Space") {
+    inputState.keys[" "] = true;
+    inputState.buttons.jump = true;
+  }
+  
+  console.log(`Key down: ${event.key} (${event.code})`);
+  
+  // Handle reload
+  if (event.key.toLowerCase() === "r") {
+    inputState.buttons.reload = true;
+  }
+}
 
-const handleKeyUp = (event: KeyboardEvent): void => {
-  // Update key state
-  inputState.keys[event.key] = false;
-};
+function handleKeyUp(event: KeyboardEvent) {
+  // Remove key from state
+  inputState.keys[event.key.toLowerCase()] = false;
+  
+  // For space key
+  if (event.code === "Space") {
+    inputState.keys[" "] = false;
+    inputState.buttons.jump = false;
+  }
+  
+  // Handle reload button release
+  if (event.key.toLowerCase() === "r") {
+    inputState.buttons.reload = false;
+  }
+}
 
 const handleMouseMove = (event: MouseEvent): void => {
   // Store absolute position
@@ -96,18 +118,24 @@ const handleMouseUp = (event: MouseEvent): void => {
  * System that handles input from keyboard and mouse
  */
 export const inputSystem: System = {
-  name: "input",
-
+  name: "inputSystem",
+  
   init() {
-    // Setup event listeners for keyboard
+    // Setup event listeners
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
-
-    // Setup event listeners for mouse
     window.addEventListener("mousemove", handleMouseMove);
     window.addEventListener("mousedown", handleMouseDown);
     window.addEventListener("mouseup", handleMouseUp);
-
+    
+    // Lock pointer when clicking on canvas
+    document.addEventListener("click", () => {
+      const canvas = document.querySelector("canvas");
+      if (canvas) {
+        canvas.requestPointerLock();
+      }
+    });
+    
     console.log("Input system initialized");
   },
 
@@ -115,26 +143,29 @@ export const inputSystem: System = {
     // Update movement values based on current key states
     // W/S keys for forward/backward
     inputState.movement.forward = 0;
-    if (inputState.keys["w"] || inputState.keys["ArrowUp"]) {
+    if (inputState.keys["w"] || inputState.keys["arrowup"]) {
       inputState.movement.forward = 1;
     }
-    if (inputState.keys["s"] || inputState.keys["ArrowDown"]) {
+    if (inputState.keys["s"] || inputState.keys["arrowdown"]) {
       inputState.movement.forward -= 1;
     }
 
     // A/D keys for left/right
     inputState.movement.right = 0;
-    if (inputState.keys["d"] || inputState.keys["ArrowRight"]) {
+    if (inputState.keys["d"] || inputState.keys["arrowright"]) {
       inputState.movement.right = 1;
     }
-    if (inputState.keys["a"] || inputState.keys["ArrowLeft"]) {
+    if (inputState.keys["a"] || inputState.keys["arrowleft"]) {
       inputState.movement.right -= 1;
     }
 
     // Space for jumping
     inputState.buttons.jump = Boolean(inputState.keys[" "]);
-
-    // Left mouse button for firing (already set in handleMouseDown/Up)
+    
+    // Debug current movement
+    if (inputState.movement.forward !== 0 || inputState.movement.right !== 0) {
+      console.log(`Movement: forward=${inputState.movement.forward}, right=${inputState.movement.right}`);
+    }
 
     // Reset mouse delta values after processing
     inputState.mouse.deltaX = 0;
@@ -148,7 +179,5 @@ export const inputSystem: System = {
     window.removeEventListener("mousemove", handleMouseMove);
     window.removeEventListener("mousedown", handleMouseDown);
     window.removeEventListener("mouseup", handleMouseUp);
-
-    console.log("Input system cleaned up");
-  },
+  }
 };

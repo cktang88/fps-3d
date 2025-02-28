@@ -236,6 +236,11 @@ export function PlayerController({
   useFrame((state, delta) => {
     if (!rigidBodyRef.current || isDead) return;
 
+    // Store camera for raycasting
+    if (typeof window !== "undefined") {
+      window.camera = state.camera;
+    }
+
     const { forward, right } = inputState.movement;
 
     // Calculate move direction from input
@@ -268,14 +273,20 @@ export function PlayerController({
       }
     }
 
-    // Apply movement
+    // Update sprinting state
+    isSprinting.current = inputState.buttons.sprint;
+
+    // Apply movement - use higher values to increase responsiveness
     const rigidBody = rigidBodyRef.current as any;
     const linvel = rigidBody.linvel();
     
+    // Move faster for better responsiveness
+    const movementMultiplier = 30; 
+    
     rigidBody.setLinvel({
-      x: direction.current.x,
+      x: direction.current.x * movementMultiplier,
       y: linvel.y, // Keep current y velocity (for jumping/falling)
-      z: direction.current.z,
+      z: direction.current.z * movementMultiplier,
     }, true);
 
     // Jumping
@@ -303,9 +314,6 @@ export function PlayerController({
         }, 500);
       }
     }
-
-    // Update sprinting state
-    isSprinting.current = inputState.buttons.sprint;
   });
 
   // Handle collision detection
@@ -338,9 +346,10 @@ export function PlayerController({
       {/* Camera */}
       <FirstPersonCamera />
 
-      {/* Weapon model */}
+      {/* Weapon model - positioned to be more visible */}
       <Weapon
         type={currentWeapon}
+        position={[0.3, -0.2, -0.4]} 
         ammo={ammo}
         maxAmmo={10}
         onFire={handleFire}
