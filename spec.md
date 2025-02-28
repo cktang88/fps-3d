@@ -57,38 +57,40 @@ We'll leverage the rich ecosystem of React Three Fiber libraries:
 fps-3d/
 ├── public/            # Static assets (models, textures, sounds)
 │   ├── models/        # 3D models for weapons, enemies, environment
-│   │   └── ui/        # Shadcn UI components
 │   ├── textures/      # Texture maps
 │   ├── sounds/        # Game audio
-│   └── fonts/         # Custom fonts
+│   ├── fonts/         # Custom fonts
+│   └── vite.svg       # Vite logo
 ├── src/
 │   ├── components/    # Reusable UI components
-│   │   └── ui/        # Shadcn UI components
 │   ├── features/      # Feature-based code organization
-│   │   ├── core/      # Core game systems
-│   │   │   ├── ecs/   # Custom Entity Component System
-│   │   │   ├── input/ # Input handling
-│   │   │   └── loop/  # Game loop
-│   │   ├── player/    # Player features
-│   │   ├── weapons/   # Weapon systems
+│   │   ├── core/      # Core game systems (contains ECS, input, loop, components)
+│   │   ├── effects/   # Visual effects
 │   │   ├── enemies/   # Enemy AI and behavior
 │   │   ├── levels/    # Game levels and environments
 │   │   ├── physics/   # Physics systems
+│   │   ├── player/    # Player features
 │   │   ├── ui/        # Game UI (HUD, menus)
-│   │   └── effects/   # Visual effects
+│   │   └── weapons/   # Weapon systems
 │   ├── hooks/         # Custom React hooks
 │   ├── types/         # TypeScript type definitions
 │   ├── utils/         # Utility functions
 │   ├── stores/        # Zustand stores
 │   ├── assets/        # Imported assets
 │   ├── App.tsx        # Main app component
+│   ├── App.css        # App styles
 │   ├── main.tsx       # Entry point
+│   ├── index.css      # Global styles
 │   └── vite-env.d.ts  # Vite environment types
-├── .eslintrc.json     # ESLint configuration
-├── .prettierrc        # Prettier configuration
+├── .gitignore         # Git ignore configuration
+├── eslint.config.js   # ESLint configuration
 ├── index.html         # HTML entry point
 ├── package.json       # Dependencies and scripts
-├── tsconfig.json      # TypeScript configuration
+├── package-lock.json  # Exact dependency versions
+├── tailwind.config.js # Tailwind CSS configuration
+├── tsconfig.json      # Main TypeScript configuration
+├── tsconfig.app.json  # App-specific TypeScript configuration
+├── tsconfig.node.json # Node-specific TypeScript configuration
 └── vite.config.ts     # Vite configuration
 ```
 

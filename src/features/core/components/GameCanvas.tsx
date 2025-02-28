@@ -4,6 +4,7 @@ import { Physics } from "@react-three/rapier";
 import { Sky, Environment, KeyboardControls } from "@react-three/drei";
 import { PlayerController } from "../../player/components/PlayerController";
 import { TestLevel } from "../../levels/components/TestLevel";
+import { HUD } from "../../ui/components/HUD";
 
 /**
  * Main game canvas component
@@ -20,6 +21,8 @@ export function GameCanvas() {
           { name: "jump", keys: ["Space"] },
           { name: "sprint", keys: ["ShiftLeft"] },
           { name: "slide", keys: ["ControlLeft"] },
+          { name: "shoot", keys: ["Mouse0"] },
+          { name: "reload", keys: ["r"] },
         ]}
       >
         <Canvas shadows camera={{ position: [0, 1.6, 0], fov: 70 }}>
@@ -35,7 +38,7 @@ export function GameCanvas() {
           <Environment preset="forest" />
 
           {/* Game physics and entities */}
-          <Physics debug>
+          <Physics debug={false}>
             <Suspense fallback={null}>
               {/* Test level */}
               <TestLevel />
@@ -45,6 +48,9 @@ export function GameCanvas() {
             </Suspense>
           </Physics>
         </Canvas>
+        
+        {/* HUD overlays the Canvas */}
+        <HUD showCrosshair={true} />
       </KeyboardControls>
     </div>
   );

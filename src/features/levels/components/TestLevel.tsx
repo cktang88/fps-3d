@@ -1,6 +1,19 @@
 import { RigidBody } from "@react-three/rapier";
+import { EnemySpawner } from "../../enemies/components/EnemySpawner";
 
 export function TestLevel() {
+  // Define spawn points around the level
+  const spawnPoints: [number, number, number][] = [
+    [-15, 1, -15],
+    [15, 1, -15],
+    [15, 1, 15],
+    [-15, 1, 15],
+    [0, 1, -20],
+    [0, 1, 20],
+    [-20, 1, 0],
+    [20, 1, 0],
+  ];
+
   return (
     <>
       {/* Floor */}
@@ -53,62 +66,63 @@ export function TestLevel() {
       </RigidBody>
 
       <RigidBody type="fixed">
-        <mesh position={[10, 1, -12]} receiveShadow castShadow>
-          <boxGeometry args={[6, 2, 2]} />
+        <mesh position={[8, 1, 5]} receiveShadow castShadow>
+          <boxGeometry args={[4, 2, 4]} />
+          <meshStandardMaterial color="#5555aa" roughness={0.3} />
+        </mesh>
+      </RigidBody>
+
+      <RigidBody type="fixed">
+        <mesh position={[0, 1, 10]} receiveShadow castShadow>
+          <boxGeometry args={[8, 2, 2]} />
           <meshStandardMaterial color="#aa5555" roughness={0.3} />
         </mesh>
       </RigidBody>
 
       <RigidBody type="fixed">
-        <mesh position={[5, 1, 8]} receiveShadow castShadow>
-          <boxGeometry args={[3, 2, 3]} />
+        <mesh position={[0, 1, -10]} receiveShadow castShadow>
+          <boxGeometry args={[8, 2, 2]} />
+          <meshStandardMaterial color="#aa5555" roughness={0.3} />
+        </mesh>
+      </RigidBody>
+
+      {/* Platforms */}
+      <RigidBody type="fixed">
+        <mesh position={[-15, 2, -15]} receiveShadow castShadow>
+          <boxGeometry args={[4, 4, 4]} />
           <meshStandardMaterial color="#55aa55" roughness={0.3} />
         </mesh>
       </RigidBody>
 
-      {/* Jumping platform */}
       <RigidBody type="fixed">
-        <mesh position={[-12, 0.5, 12]} receiveShadow castShadow>
-          <boxGeometry args={[4, 1, 4]} />
-          <meshStandardMaterial color="#aaaa55" roughness={0.3} />
-        </mesh>
-      </RigidBody>
-
-      <RigidBody type="fixed">
-        <mesh position={[-12, 2, 18]} receiveShadow castShadow>
+        <mesh position={[15, 2, -15]} receiveShadow castShadow>
           <boxGeometry args={[4, 4, 4]} />
-          <meshStandardMaterial color="#aaaa55" roughness={0.3} />
+          <meshStandardMaterial color="#55aa55" roughness={0.3} />
         </mesh>
       </RigidBody>
 
-      {/* Ramps for sliding test */}
-      <RigidBody type="fixed" rotation={[-Math.PI / 12, 0, 0]}>
-        <mesh position={[0, 0.5, -15]} receiveShadow castShadow>
-          <boxGeometry args={[10, 0.5, 8]} />
-          <meshStandardMaterial color="#aa55aa" roughness={0.3} />
+      <RigidBody type="fixed">
+        <mesh position={[15, 2, 15]} receiveShadow castShadow>
+          <boxGeometry args={[4, 4, 4]} />
+          <meshStandardMaterial color="#55aa55" roughness={0.3} />
         </mesh>
       </RigidBody>
 
-      {/* Pillars */}
-      {Array.from({ length: 5 }).map((_, i) => (
-        <RigidBody key={i} type="fixed">
-          <mesh
-            position={[
-              Math.sin(i * Math.PI * 0.4) * 15,
-              3,
-              Math.cos(i * Math.PI * 0.4) * 15,
-            ]}
-            receiveShadow
-            castShadow
-          >
-            <cylinderGeometry args={[1, 1, 6, 16]} />
-            <meshStandardMaterial
-              color={`hsl(${i * 50}, 70%, 60%)`}
-              roughness={0.3}
-            />
-          </mesh>
-        </RigidBody>
-      ))}
+      <RigidBody type="fixed">
+        <mesh position={[-15, 2, 15]} receiveShadow castShadow>
+          <boxGeometry args={[4, 4, 4]} />
+          <meshStandardMaterial color="#55aa55" roughness={0.3} />
+        </mesh>
+      </RigidBody>
+
+      {/* Enemy Spawner */}
+      <EnemySpawner 
+        maxEnemies={10}
+        spawnPoints={spawnPoints}
+        spawnRate={6}
+        difficulty={3}
+        active={true}
+      />
     </>
   );
 }
