@@ -1,7 +1,7 @@
 import { Canvas } from "@react-three/fiber";
 import { Suspense } from "react";
 import { Physics } from "@react-three/rapier";
-import { Sky, Environment, KeyboardControls } from "@react-three/drei";
+import { Sky, Environment, KeyboardControls, Stats, OrbitControls } from "@react-three/drei";
 import { PlayerController } from "../../player/components/PlayerController";
 import { TestLevel } from "../../levels/components/TestLevel";
 import { EnhancedHUD } from "../../ui/components/EnhancedHUD";
@@ -11,22 +11,30 @@ import { Minimap } from "../../ui/components/Minimap";
  * Main game canvas component
  */
 export function GameCanvas() {
+  // Define specific keyboard control mapping to make movement reliable
+  const keyboardMap = [
+    { name: "forward", keys: ["w", "ArrowUp"] },
+    { name: "backward", keys: ["s", "ArrowDown"] },
+    { name: "left", keys: ["a", "ArrowLeft"] },
+    { name: "right", keys: ["d", "ArrowRight"] },
+    { name: "jump", keys: ["Space"] },
+    { name: "sprint", keys: ["ShiftLeft", "Shift"] },
+    { name: "slide", keys: ["ControlLeft", "Control"] },
+    { name: "shoot", keys: ["Mouse0"] },
+    { name: "reload", keys: ["r"] },
+  ];
+
   return (
     <div className="absolute inset-0 w-full h-full">
-      <KeyboardControls
-        map={[
-          { name: "forward", keys: ["w", "ArrowUp"] },
-          { name: "backward", keys: ["s", "ArrowDown"] },
-          { name: "left", keys: ["a", "ArrowLeft"] },
-          { name: "right", keys: ["d", "ArrowRight"] },
-          { name: "jump", keys: ["Space"] },
-          { name: "sprint", keys: ["ShiftLeft"] },
-          { name: "slide", keys: ["ControlLeft"] },
-          { name: "shoot", keys: ["Mouse0"] },
-          { name: "reload", keys: ["r"] },
-        ]}
-      >
-        <Canvas shadows camera={{ position: [0, 1.6, 0], fov: 75 }} style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}>
+      <KeyboardControls map={keyboardMap}>
+        <Canvas 
+          shadows 
+          style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
+          camera={{ position: [0, 1.6, 0], fov: 75 }}
+        >
+          {/* Performance monitor */}
+          <Stats />
+          
           {/* Environment */}
           <ambientLight intensity={0.3} />
           <directionalLight
@@ -49,13 +57,22 @@ export function GameCanvas() {
             </Suspense>
           </Physics>
         </Canvas>
-        
-        {/* HUD overlays the Canvas */}
+
+        {/* UI Elements */}
         <div className="pointer-events-none">
-          <EnhancedHUD showCrosshair={true} showObjective={true} />
+          <EnhancedHUD />
           <div className="absolute top-6 right-6 w-40 h-40">
-            <Minimap />
+            <Minimap size={200} />
           </div>
+          
+          {/* Debug tools - only in development */}
+          {process.env.NODE_ENV !== 'production' && (
+            <div className="absolute top-16 left-2 bg-black bg-opacity-70 text-white p-2 text-xs font-mono">
+              <div>WASD = Move, Mouse = Look</div>
+              <div>Space = Jump, Shift = Sprint</div>
+              <div>Left Click = Shoot, R = Reload</div>
+            </div>
+          )}
         </div>
       </KeyboardControls>
     </div>

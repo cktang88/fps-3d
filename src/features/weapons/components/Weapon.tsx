@@ -6,6 +6,15 @@ import { inputState } from "../../core/ecs/systems/inputSystem";
 
 export type WeaponType = "pistol" | "shotgun" | "rifle" | "plasmagun";
 
+// Impact type for bullet hits
+export interface Impact {
+  id: string;
+  position: [number, number, number];
+  normal: [number, number, number]; 
+  type: "bullet" | "plasma" | "shotgun";
+  createdAt: number;
+}
+
 export interface WeaponProps {
   type?: WeaponType;
   position?: [number, number, number];

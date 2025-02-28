@@ -1,10 +1,12 @@
-import { useFrame } from "@react-three/fiber";
+import { useFrame, useThree } from "@react-three/fiber";
 import { useRef, useState, useEffect } from "react";
 import { Vector3, Group, Raycaster, Vector2, Camera } from "three";
-import { useRapier, RigidBody } from "@react-three/rapier";
+import { useRapier, RigidBody, CapsuleCollider, CuboidCollider } from "@react-three/rapier";
+import type { RigidBody as RapierRigidBody } from "@react-three/rapier";
+import { Collider } from "@dimforge/rapier3d-compat";
 import { inputState } from "../../core/ecs/systems/inputSystem";
 import { FirstPersonCamera } from "./FirstPersonCamera";
-import { Weapon, WeaponType } from "../../weapons/components/Weapon";
+import { Weapon, WeaponType, Impact } from "../../weapons/components/Weapon";
 import {
   MuzzleFlash,
   BulletTracer,
@@ -15,106 +17,425 @@ import { usePlayerStore } from "../stores/playerStore";
 // Extend Window interface to store camera reference
 declare global {
   interface Window {
-    camera: Camera | undefined;
+    camera?: Camera;
   }
 }
 
+// Weapon stats for different weapon types
+const weaponStats = {
+  pistol: {
+    damage: 15,
+    fireRate: 0.25,
+    maxAmmo: 12,
+    reloadTime: 1.2,
+  },
+  shotgun: {
+    damage: 8,
+    fireRate: 0.8,
+    maxAmmo: 8,
+    reloadTime: 2.0,
+  },
+  rifle: {
+    damage: 20,
+    fireRate: 0.1,
+    maxAmmo: 30,
+    reloadTime: 1.5,
+  },
+  plasmagun: {
+    damage: 25,
+    fireRate: 0.2,
+    maxAmmo: 20,
+    reloadTime: 1.8,
+  },
+};
+
 interface PlayerControllerProps {
   position?: [number, number, number];
-  speed?: number;
+  moveSpeed?: number;
   jumpForce?: number;
-  sprintMultiplier?: number;
-  slideForce?: number;
-  slideDuration?: number;
+  mass?: number;
+  maxHealth?: number;
 }
 
 export function PlayerController({
   position = [0, 1, 0],
-  speed = 5,
+  moveSpeed = 5,
   jumpForce = 5,
-  sprintMultiplier = 1.5,
-  slideForce = 8,
-  slideDuration = 600,
+  mass = 1,
+  maxHealth = 100,
 }: PlayerControllerProps) {
-  const playerRef = useRef<Group>(null);
-  const rigidBodyRef = useRef(null);
+  // References
+  const playerRef = useRef<RapierRigidBody>(null);
+  const modelRef = useRef<THREE.Group>(null);
+  const cameraRef = useRef<any>(null);
+  const groundSensor = useRef<boolean>(false);
+  const jumpTimer = useRef<number>(0);
+  const velocity = useRef<Vector3>(new Vector3());
+  const directionOffset = useRef<number>(0);
+  const raycaster = useRef(new Raycaster());
+  const screenCenter = useRef(new Vector2(0, 0));
+
+  // Get camera and physics from three.js context
+  const { camera } = useThree();
   const { rapier, world } = useRapier();
 
   // Player state
-  const isJumping = useRef(false);
-  const isSprinting = useRef(false);
-  const isSliding = useRef(false);
-  const slideTimer = useRef(0);
-  const slideDirection = useRef(new Vector3());
-  const direction = useRef(new Vector3());
-  const playerRotation = useRef(0);
-
-  // Player health and combat stats
-  const health = usePlayerStore((state) => state.health);
-  const isDead = usePlayerStore((state) => state.isDead);
-  const takeDamage = usePlayerStore((state) => state.takeDamage);
-  const setHealth = usePlayerStore((state) => state.setHealth);
-  const isInvulnerable = usePlayerStore((state) => state.isInvulnerable);
-  const invulnerabilityTimer = usePlayerStore((state) => state.invulnerabilityTimer);
-  const setIsInvulnerable = usePlayerStore((state) => state.setIsInvulnerable);
-  const setInvulnerabilityTimer = usePlayerStore((state) => state.setInvulnerabilityTimer);
-  const damageTaken = usePlayerStore((state) => state.damageTaken);
-  const setDamageTaken = usePlayerStore((state) => state.setDamageTaken);
-
-  // Weapon state
-  const [currentWeapon, setCurrentWeapon] = useState<WeaponType>("pistol");
-  const ammo = usePlayerStore((state) => state.ammo);
-  const setAmmo = usePlayerStore((state) => state.setAmmo);
-  const reloading = usePlayerStore((state) => state.reloading);
-  const setReloading = usePlayerStore((state) => state.setReloading);
+  const [health, setHealth] = useState(maxHealth);
+  const [isDead, setIsDead] = useState(false);
+  const [isJumping, setIsJumping] = useState(false);
+  const [isGrounded, setIsGrounded] = useState(false);
 
   // Visual effects state
   const [effects, setEffects] = useState<{
-    muzzleFlash: boolean;
-    tracers: Array<{
-      id: number;
-      start: [number, number, number];
-      end: [number, number, number];
-    }>;
-    impacts: Array<{
-      id: number;
-      position: [number, number, number];
-      type: "concrete" | "metal" | "dirt" | "enemy";
-    }>;
+    muzzleFlash: { visible: boolean; position: [number, number, number] };
+    bulletTracer: { visible: boolean; start: [number, number, number]; end: [number, number, number] };
   }>({
-    muzzleFlash: false,
-    tracers: [],
-    impacts: [],
+    muzzleFlash: { visible: false, position: [0, 0, 0] },
+    bulletTracer: { visible: false, start: [0, 0, 0], end: [0, 0, 0] },
   });
 
-  // Track effect IDs
-  const nextEffectId = useRef(0);
+  // Handle debug logging
+  const DEBUG = true;
+  const debugLog = (message: string) => {
+    if (DEBUG) console.log(`[Player] ${message}`);
+  };
 
-  // Cleanup effects after they expire
+  // Set up initial player position
   useEffect(() => {
-    if (effects.muzzleFlash) {
-      const timer = setTimeout(() => {
-        setEffects((prev) => ({ ...prev, muzzleFlash: false }));
-      }, 100); // Match duration in MuzzleFlash component
-
-      return () => clearTimeout(timer);
+    if (playerRef.current) {
+      const body = playerRef.current;
+      body.setTranslation(
+        { x: position[0], y: position[1], z: position[2] },
+        true
+      );
+      debugLog(`Player initialized at position: ${position.join(", ")}`);
     }
-  }, [effects.muzzleFlash]);
+  }, [position]);
 
-  // Cleanup damage indicator
-  useEffect(() => {
-    if (damageTaken) {
-      const timer = setTimeout(() => {
-        setDamageTaken(false);
-      }, 500);
-      
-      return () => clearTimeout(timer);
+  // Handle input and physics updates
+  useFrame((state, delta) => {
+    if (isDead || !playerRef.current) return;
+
+    const body = playerRef.current;
+    const bodyPosition = body.translation();
+
+    // Get linear velocity for current frame
+    const linearVel = body.linvel();
+
+    // Get input state
+    const { jump, forward, right } = inputState.movement;
+
+    // Update ground state
+    if (jumpTimer.current > 0) {
+      jumpTimer.current -= delta;
     }
-  }, [damageTaken]);
 
-  // Raycaster for shooting
-  const raycaster = useRef(new Raycaster());
-  const screenCenter = useRef(new Vector2(0, 0));
+    setIsGrounded(groundSensor.current && jumpTimer.current <= 0);
+
+    // Calculate movement direction based on camera orientation
+    velocity.current.set(0, 0, 0);
+
+    if (forward !== 0 || right !== 0) {
+      // Convert from screen space to world space direction
+      const cameraDirection = new Vector3();
+      camera.getWorldDirection(cameraDirection);
+      cameraDirection.y = 0;
+      cameraDirection.normalize();
+
+      // Calculate forward direction
+      const forwardDirection = cameraDirection.clone().multiplyScalar(forward);
+
+      // Calculate right direction (perpendicular to forward)
+      const rightDirection = new Vector3(
+        -cameraDirection.z,
+        0,
+        cameraDirection.x
+      ).multiplyScalar(right);
+
+      // Combine directions
+      velocity.current.add(forwardDirection).add(rightDirection);
+
+      // Normalize if moving diagonally
+      if (velocity.current.length() > 1) {
+        velocity.current.normalize();
+      }
+
+      // Scale by movement speed
+      velocity.current.multiplyScalar(moveSpeed);
+
+      // Preserve vertical velocity (gravity, jumping)
+      velocity.current.y = linearVel.y;
+
+      // Debug movement
+      if (DEBUG && Math.random() < 0.02) {
+        debugLog(
+          `Movement - Forward: ${forward.toFixed(2)}, Right: ${right.toFixed(
+            2
+          )}`
+        );
+        debugLog(
+          `Velocity: ${velocity.current.x.toFixed(
+            2
+          )}, ${velocity.current.y.toFixed(2)}, ${velocity.current.z.toFixed(
+            2
+          )}`
+        );
+      }
+    } else {
+      // No horizontal movement, preserve vertical velocity
+      velocity.current.set(0, linearVel.y, 0);
+    }
+
+    // Jump handling
+    if (jump && isGrounded) {
+      velocity.current.y = jumpForce;
+      setIsJumping(true);
+      jumpTimer.current = 0.3; // Prevent immediate re-jumping
+      debugLog("Jumping");
+    }
+
+    // Apply velocity to physics body
+    body.setLinvel(
+      { x: velocity.current.x, y: velocity.current.y, z: velocity.current.z },
+      true
+    );
+
+    // Update model position to match physics body
+    if (modelRef.current) {
+      modelRef.current.position.set(
+        bodyPosition.x,
+        bodyPosition.y - 0.8,
+        bodyPosition.z
+      );
+    }
+
+    // Update camera to follow player position
+    // This updates the Y position from physics (jumping/falling)
+    // The X/Z position is handled by the FirstPersonCamera movement
+    if (window.camera) {
+      window.camera.position.y = bodyPosition.y + 0.8; // Position at eye level
+    }
+  });
+
+  // Handle player damage
+  const takeDamage = (amount: number) => {
+    if (isDead) return;
+
+    setHealth((prev) => {
+      const newHealth = Math.max(0, prev - amount);
+      if (newHealth <= 0) {
+        setIsDead(true);
+        debugLog("Player died");
+      }
+      return newHealth;
+    });
+  };
+
+  // Ground sensor for jumping
+  const onSensorCollisionEnter = ({ other }: { other: Collider }) => {
+    // Skip if colliding with another sensor
+    if (other.isSensor()) return;
+
+    groundSensor.current = true;
+    if (isJumping) {
+      setIsJumping(false);
+      debugLog("Landed on ground");
+    }
+  };
+
+  const onSensorCollisionExit = ({ other }: { other: Collider }) => {
+    // Skip if other object is a sensor
+    if (other.isSensor()) return;
+
+    groundSensor.current = false;
+  };
+
+  // Weapon state
+  const [currentWeapon, setCurrentWeapon] = useState<WeaponType>("pistol");
+  const [ammo, setAmmo] = useState(30);
+  const [reloading, setReloading] = useState(false);
+  const [shooting, setShooting] = useState(false);
+  const [impacts, setImpacts] = useState<Impact[]>([]);
+  const [weaponPosition, setWeaponPosition] = useState<
+    [number, number, number]
+  >([0.3, -0.3, -0.5]);
+
+  // Simplified weapon stats for the demo
+  const weaponStats = {
+    pistol: {
+      damage: 15,
+      fireRate: 0.3,
+      range: 100,
+      reloadTime: 1.5,
+      maxAmmo: 12,
+    },
+    rifle: {
+      damage: 25,
+      fireRate: 0.1,
+      range: 200,
+      reloadTime: 2,
+      maxAmmo: 30,
+    },
+    shotgun: {
+      damage: 50,
+      fireRate: 0.8,
+      range: 50,
+      reloadTime: 2.5,
+      maxAmmo: 8,
+    },
+  };
+
+  // Handle shooting
+  const handleFire = () => {
+    if (reloading || ammo <= 0) {
+      // Auto reload if no ammo
+      if (ammo <= 0) {
+        handleReload();
+      }
+      return;
+    }
+
+    // Record that we're shooting
+    setShooting(true);
+
+    // Decrease ammo
+    setAmmo((prev) => prev - 1);
+
+    // Get current weapon stats
+    const currentWeaponData = weaponStats[currentWeapon];
+
+    // Calculate ray from camera
+    const rayOrigin = new Vector3();
+    const rayDirection = new Vector3();
+
+    if (window.camera) {
+      // Get ray start and direction from camera
+      window.camera.getWorldPosition(rayOrigin);
+      window.camera.getWorldDirection(rayDirection);
+
+      // Set the raycaster
+      raycaster.current.set(rayOrigin, rayDirection);
+
+      // Convert to physics ray format
+      const rayDirPhysics = {
+        x: rayDirection.x,
+        y: rayDirection.y,
+        z: rayDirection.z,
+      };
+
+      // Get ray in the format expected by Rapier physics
+      const rayOriginPhysics = { x: rayOrigin.x, y: rayOrigin.y, z: rayOrigin.z };
+      const ray = new rapier.Ray(rayOriginPhysics, rayDirPhysics);
+
+      // Cast the ray
+      const hit = world.castRay(
+        ray,
+        currentWeaponData.range,
+        true
+      );
+
+      // Default end position (if no hit)
+      const endPosition: [number, number, number] = [
+        rayOrigin.x + rayDirection.x * currentWeaponData.range,
+        rayOrigin.y + rayDirection.y * currentWeaponData.range,
+        rayOrigin.z + rayDirection.z * currentWeaponData.range,
+      ];
+
+      const normalVector: [number, number, number] = [0, 0, 0];
+
+      // If we hit something
+      if (hit) {
+        const hitPoint = ray.pointAt(hit.toi);
+        endPosition[0] = hitPoint.x;
+        endPosition[1] = hitPoint.y;
+        endPosition[2] = hitPoint.z;
+
+        if (hit.collider.parent()) {
+          const hitObject = hit.collider.parent().userData;
+
+          // Handle different hit types
+          if (hitObject?.type === "enemy") {
+            // Enemy hit
+            if (hitObject.takeDamage) {
+              hitObject.takeDamage(currentWeaponData.damage);
+            }
+          }
+        }
+
+        // Create an impact
+        const newImpact: Impact = {
+          id: Math.random().toString(36).substr(2, 9),
+          position: endPosition,
+          normal: normalVector,
+          type:
+            currentWeapon === "plasmagun"
+              ? "plasma"
+              : currentWeapon === "shotgun"
+              ? "shotgun"
+              : "bullet",
+          createdAt: Date.now(),
+        };
+
+        setImpacts((prev) => [...prev, newImpact]);
+
+        // Clean up old impacts after 2 seconds
+        setTimeout(() => {
+          setImpacts((prev) => prev.filter((i) => i.id !== newImpact.id));
+        }, 2000);
+      }
+
+      // Set effects
+      setEffects((prev) => ({
+        ...prev,
+        muzzleFlash: {
+          visible: true,
+          position: weaponPosition,
+        },
+        bulletTracer: {
+          visible: true,
+          start: [
+            rayOrigin.x,
+            rayOrigin.y,
+            rayOrigin.z,
+          ],
+          end: endPosition,
+        },
+      }));
+
+      // Hide effects after a short delay
+      setTimeout(() => {
+        setEffects((prev) => ({
+          ...prev,
+          muzzleFlash: {
+            ...prev.muzzleFlash,
+            visible: false,
+          },
+          bulletTracer: {
+            ...prev.bulletTracer,
+            visible: false,
+          },
+        }));
+
+        // Reset shooting state
+        setShooting(false);
+      }, 100);
+    }
+  };
+
+  // Handle reloading
+  const handleReload = () => {
+    if (reloading) return;
+
+    // Start reloading
+    setReloading(true);
+
+    // After reload time, restore ammo
+    setTimeout(() => {
+      const currentWeaponData = weaponStats[currentWeapon];
+      setReloading(false);
+      setAmmo(currentWeaponData.maxAmmo);
+    }, weaponStats[currentWeapon].reloadTime * 1000);
+  };
 
   // Weapon switching
   useFrame(() => {
@@ -125,263 +446,73 @@ export function PlayerController({
     if (inputState.keys["4"]) setCurrentWeapon("plasmagun");
   });
 
-  // Handle player shooting
-  const handleFire = () => {
-    if (ammo > 0 && window.camera) {
-      setAmmo(ammo - 1);
-
-      // Show muzzle flash
-      setEffects((prev) => ({ ...prev, muzzleFlash: true }));
-
-      // Cast ray from camera direction
-      raycaster.current.setFromCamera(screenCenter.current, window.camera);
-
-      // Calculate raycast range based on weapon
-      const range = currentWeapon === "shotgun" ? 20 : 100;
-
-      // Get ray origin and direction
-      const rayOrigin = raycaster.current.ray.origin.clone();
-      const rayDirection = raycaster.current.ray.direction.clone();
-
-      // Create raycast for physics
-      const rayDirPhysics = {
-        x: rayDirection.x,
-        y: rayDirection.y,
-        z: rayDirection.z,
-      };
-
-      const ray = new rapier.Ray(rayOrigin, rayDirPhysics);
-      const hit = world.castRay(ray, range, true);
-
-      // Default end position (if no hit)
-      const endPosition: [number, number, number] = [
-        rayOrigin.x + rayDirection.x * range,
-        rayOrigin.y + rayDirection.y * range,
-        rayOrigin.z + rayDirection.z * range,
-      ];
-
-      if (hit) {
-        // Get hit position
-        const hitDistance = hit.toi ?? range;
-        endPosition[0] = rayOrigin.x + rayDirection.x * hitDistance;
-        endPosition[1] = rayOrigin.y + rayDirection.y * hitDistance;
-        endPosition[2] = rayOrigin.z + rayDirection.z * hitDistance;
-
-        // Determine hit surface type
-        const hitType: "concrete" | "metal" | "dirt" | "enemy" = "concrete";
-
-        // Add impact effect
-        setEffects((prev) => ({
-          ...prev,
-          impacts: [
-            ...prev.impacts,
-            {
-              id: nextEffectId.current++,
-              position: [...endPosition] as [number, number, number],
-              type: hitType,
-            },
-          ],
-        }));
-
-        // TODO: Apply damage if we hit an enemy
-      }
-
-      // Get weapon position (muzzle)
-      const weaponPos: [number, number, number] = [
-        rayOrigin.x + 0.25,
-        rayOrigin.y - 0.25,
-        rayOrigin.z - 0.3,
-      ];
-
-      // Add tracer effect
-      setEffects((prev) => ({
-        ...prev,
-        tracers: [
-          ...prev.tracers,
-          {
-            id: nextEffectId.current++,
-            start: weaponPos,
-            end: endPosition,
-          },
-        ],
-      }));
-
-      // Remove expired effects after a delay
-      setTimeout(() => {
-        setEffects((prev) => ({
-          ...prev,
-          tracers: prev.tracers.filter(
-            (t) => t.id !== nextEffectId.current - 1
-          ),
-          impacts: prev.impacts.filter(
-            (i) => i.id !== nextEffectId.current - 1
-          ),
-        }));
-      }, 2000);
-    }
-  };
-
-  // Handle player reloading
-  const handleReload = () => {
-    setReloading(true);
-    
-    // Reload after delay
-    setTimeout(() => {
-      setAmmo(10); // Set to full magazine
-      setReloading(false);
-    }, 2000);
-  };
-
-  // Handle player movement
-  useFrame((state, delta) => {
-    if (!rigidBodyRef.current || isDead) return;
-
-    // Store camera for raycasting
-    if (typeof window !== "undefined") {
-      window.camera = state.camera;
-    }
-
-    const { forward, right } = inputState.movement;
-
-    // Calculate move direction from input
-    direction.current.set(
-      right,
-      0,
-      forward
-    ).normalize().multiplyScalar(isSprinting.current ? speed * sprintMultiplier : speed);
-
-    // Rotate direction based on camera angle
-    playerRotation.current = state.camera.rotation.y;
-    direction.current.applyAxisAngle(new Vector3(0, 1, 0), playerRotation.current);
-
-    // Move player
-    if (isSliding.current) {
-      // During slide, keep sliding in the slide direction with decay
-      direction.current.copy(slideDirection.current);
-      slideTimer.current -= delta * 1000;
-
-      if (slideTimer.current <= 0) {
-        isSliding.current = false;
-      }
-    } else {
-      // Normal movement
-      if (inputState.buttons.slide && (forward !== 0 || right !== 0) && !isJumping.current) {
-        // Start sliding
-        isSliding.current = true;
-        slideTimer.current = slideDuration;
-        slideDirection.current.copy(direction.current).normalize().multiplyScalar(slideForce);
-      }
-    }
-
-    // Update sprinting state
-    isSprinting.current = inputState.buttons.sprint;
-
-    // Apply movement - use higher values to increase responsiveness
-    const rigidBody = rigidBodyRef.current as any;
-    const linvel = rigidBody.linvel();
-    
-    // Move faster for better responsiveness
-    const movementMultiplier = 30; 
-    
-    rigidBody.setLinvel({
-      x: direction.current.x * movementMultiplier,
-      y: linvel.y, // Keep current y velocity (for jumping/falling)
-      z: direction.current.z * movementMultiplier,
-    }, true);
-
-    // Jumping
-    if (inputState.buttons.jump && !isJumping.current) {
-      const rayFrom = {
-        x: rigidBody.translation().x,
-        y: rigidBody.translation().y - 0.05,
-        z: rigidBody.translation().z,
-      };
-      const rayDir = { x: 0, y: -1, z: 0 };
-      const ray = new rapier.Ray(rayFrom, rayDir);
-      const hit = world.castRay(ray, 1.1, true);
-
-      if (hit) {
-        isJumping.current = true;
-        rigidBody.setLinvel({
-          x: linvel.x,
-          y: jumpForce,
-          z: linvel.z,
-        }, true);
-
-        // Reset jumping state when landing
-        setTimeout(() => {
-          isJumping.current = false;
-        }, 500);
-      }
-    }
-  });
-
-  // Handle collision detection
-  const handleCollision = (e: any) => {
-    // Check if collision with enemy or enemy projectile
-    if (e.other.rigidBodyObject?.name === 'enemy-projectile') {
-      takeDamage(10); // Default damage amount for enemy projectile
-    } else if (e.other.rigidBodyObject?.name === 'enemy') {
-      takeDamage(5); // Default damage amount for enemy contact
-    }
-  };
-
   return (
-    <group ref={playerRef}>
+    <>
+      {/* Player rigid body */}
       <RigidBody
-        ref={rigidBodyRef}
+        ref={playerRef}
+        colliders={false}
+        mass={mass}
+        type="dynamic"
         position={position}
         enabledRotations={[false, false, false]}
-        linearDamping={isSliding.current ? 0.5 : 5}
-        onCollisionEnter={handleCollision}
-        name="player"
+        lockRotations
       >
-        {/* Player collision shape */}
-        <mesh visible={false}>
-          <capsuleGeometry args={[0.5, 1, 4, 8]} />
-          <meshBasicMaterial wireframe color="red" />
-        </mesh>
+        {/* Player collider */}
+        <CapsuleCollider args={[0.4, 0.4]} />
+
+        {/* Ground sensor for jump detection */}
+        <CuboidCollider
+          args={[0.2, 0.1, 0.2]}
+          position={[0, -0.5, 0]}
+          sensor
+          onIntersectionEnter={onSensorCollisionEnter}
+          onIntersectionExit={onSensorCollisionExit}
+        />
       </RigidBody>
 
-      {/* Camera */}
-      <FirstPersonCamera />
+      {/* Player model */}
+      <group ref={modelRef} position={position}>
+        {/* Simple character model placeholder */}
+        <mesh castShadow position={[0, 0.8, 0]}>
+          <capsuleGeometry args={[0.4, 0.8, 4, 8]} />
+          <meshStandardMaterial color={isDead ? "red" : "blue"} />
+        </mesh>
+      </group>
+
+      {/* First person camera */}
+      <FirstPersonCamera
+        position={[position[0], position[1] + 0.8, position[2]]}
+        moveSpeed={moveSpeed}
+        ref={cameraRef}
+      />
 
       {/* Weapon model - positioned to be more visible */}
       <Weapon
         type={currentWeapon}
-        position={[0.3, -0.2, -0.4]} 
+        position={weaponPosition}
         ammo={ammo}
-        maxAmmo={10}
+        maxAmmo={weaponStats[currentWeapon].maxAmmo}
         onFire={handleFire}
         onReload={handleReload}
       />
 
       {/* Visual effects */}
-      {effects.muzzleFlash && <MuzzleFlash />}
-      
-      {effects.tracers.map((tracer) => (
-        <BulletTracer
-          key={tracer.id}
-          start={tracer.start}
-          end={tracer.end}
-        />
-      ))}
-      
-      {effects.impacts.map((impact) => (
+      {effects.muzzleFlash.visible && <MuzzleFlash />}
+
+      {effects.bulletTracer.visible && (
+        <BulletTracer start={effects.bulletTracer.start} end={effects.bulletTracer.end} />
+      )}
+
+      {impacts.map((impact) => (
         <ImpactEffect
           key={impact.id}
           position={impact.position}
-          type={impact.type}
+          normal={impact.normal}
+          color={impact.type === 'plasma' ? '#00ffff' : impact.type === 'shotgun' ? '#ff8800' : '#ffff00'}
+          size={impact.type === 'shotgun' ? 0.2 : 0.1}
         />
       ))}
-
-      {/* Damage indicator overlay */}
-      {damageTaken && (
-        <mesh position={[0, 0, -1]}>
-          <planeGeometry args={[2, 2]} />
-          <meshBasicMaterial color="red" transparent opacity={0.3} />
-        </mesh>
-      )}
-    </group>
+    </>
   );
 }
