@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { usePlayerStore } from "../../player/stores/playerStore";
 import { useGameStore } from "../../../stores/gameStore";
 import { useLevelManager } from "../../levels/LevelManager";
@@ -9,28 +9,76 @@ interface EnhancedHUDProps {
 }
 
 export function EnhancedHUD({ showCrosshair = true, showObjective = true }: EnhancedHUDProps) {
-  const health = usePlayerStore((state) => state.health);
-  const maxHealth = usePlayerStore((state) => state.maxHealth);
-  const armor = usePlayerStore((state) => state.armor);
-  const maxArmor = usePlayerStore((state) => state.maxArmor);
-  const ammo = usePlayerStore((state) => state.ammo);
-  const maxAmmo = usePlayerStore((state) => state.maxAmmo);
-  const score = usePlayerStore((state) => state.score);
-  const enemiesKilled = usePlayerStore((state) => state.enemiesKilled);
-  const isDead = usePlayerStore((state) => state.isDead);
+  // Use refs to store state values
+  const healthRef = useRef(usePlayerStore.getState().health);
+  const maxHealthRef = useRef(usePlayerStore.getState().maxHealth);
+  const armorRef = useRef(usePlayerStore.getState().armor);
+  const maxArmorRef = useRef(usePlayerStore.getState().maxArmor);
+  const ammoRef = useRef(usePlayerStore.getState().ammo);
+  const maxAmmoRef = useRef(usePlayerStore.getState().maxAmmo);
+  const scoreRef = useRef(usePlayerStore.getState().score);
+  const enemiesKilledRef = useRef(usePlayerStore.getState().enemiesKilled);
+  const isDeadRef = useRef(usePlayerStore.getState().isDead);
+  
+  // Game state refs
+  const showHUDRef = useRef(useGameStore.getState().showHUD);
+  const currentLevelRef = useRef(useGameStore.getState().currentLevel);
+  
+  // Local UI state
   const [hitMarker, setHitMarker] = useState(false);
   const [damageTaken, setDamageTaken] = useState(false);
   const [showMessage, setShowMessage] = useState(false);
   const [message, setMessage] = useState("");
   
-  // Game state
-  const showHUD = useGameStore((state) => state.showHUD);
-  const currentLevel = useGameStore((state) => state.currentLevel);
-  
-  // Level info
-  const levelData = useLevelManager((state) => 
-    state.levels[currentLevel] || { name: "Unknown Level", description: "" }
+  // Level info ref
+  const levelDataRef = useRef(
+    useLevelManager.getState().levels[currentLevelRef.current] || 
+    { name: "Unknown Level", description: "" }
   );
+
+  // Subscribe to store updates
+  useEffect(() => {
+    // Subscribe to player store updates
+    const unsubPlayer = usePlayerStore.subscribe((state) => {
+      healthRef.current = state.health;
+      maxHealthRef.current = state.maxHealth;
+      armorRef.current = state.armor;
+      maxArmorRef.current = state.maxArmor;
+      ammoRef.current = state.ammo;
+      maxAmmoRef.current = state.maxAmmo;
+      scoreRef.current = state.score;
+      enemiesKilledRef.current = state.enemiesKilled;
+      isDeadRef.current = state.isDead;
+    });
+    
+    // Subscribe to game store updates
+    const unsubGame = useGameStore.subscribe((state) => {
+      showHUDRef.current = state.showHUD;
+      currentLevelRef.current = state.currentLevel;
+      
+      // Update level data when current level changes
+      if (currentLevelRef.current) {
+        levelDataRef.current = 
+          useLevelManager.getState().levels[currentLevelRef.current] || 
+          { name: "Unknown Level", description: "" };
+      }
+    });
+    
+    // Subscribe to level manager store updates
+    const unsubLevel = useLevelManager.subscribe((state) => {
+      if (currentLevelRef.current) {
+        levelDataRef.current = 
+          state.levels[currentLevelRef.current] || 
+          { name: "Unknown Level", description: "" };
+      }
+    });
+    
+    return () => {
+      unsubPlayer();
+      unsubGame();
+      unsubLevel();
+    };
+  }, []);
 
   // Subscribe to hit events
   useEffect(() => {
@@ -76,7 +124,19 @@ export function EnhancedHUD({ showCrosshair = true, showObjective = true }: Enha
   };
   
   // If HUD is disabled, don't render
-  if (!showHUD) return null;
+  if (!showHUDRef.current) return null;
+
+  // Get current values from refs for rendering
+  const health = healthRef.current;
+  const maxHealth = maxHealthRef.current;
+  const armor = armorRef.current;
+  const maxArmor = maxArmorRef.current;
+  const ammo = ammoRef.current;
+  const maxAmmo = maxAmmoRef.current;
+  const score = scoreRef.current;
+  const enemiesKilled = enemiesKilledRef.current;
+  const isDead = isDeadRef.current;
+  const levelData = levelDataRef.current;
 
   return (
     <div className="absolute inset-0 pointer-events-none">

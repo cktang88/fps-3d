@@ -1,5 +1,4 @@
-import { useEffect, useRef } from "react";
-import { useFrame } from "@react-three/fiber";
+import { useEffect, useRef, useCallback } from "react";
 import { usePlayerStore } from "../../player/stores/playerStore";
 import { useEnemyStore } from "../../enemies/stores/enemyStore";
 import { useLevelManager } from "../../levels/LevelManager";
@@ -22,123 +21,205 @@ export function Minimap({
   position = { top: 20, right: 20 },
 }: MinimapProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const playerPosition = usePlayerStore((state) => state.position);
-  const playerRotation = usePlayerStore((state) => state.rotation);
-  const enemies = useEnemyStore((state) => state.enemies);
-  const objectives = useLevelManager((state) => state.currentLevelObjectives);
-  const walls = useLevelManager((state) => state.currentLevelWalls);
+  const animationFrameRef = useRef<number>();
   
-  // Use frame to update the minimap on each frame
-  useFrame(() => {
+  // Use refs to store state values
+  const playerPositionRef = useRef(usePlayerStore.getState().position);
+  const playerRotationRef = useRef(usePlayerStore.getState().rotation);
+  const enemiesRef = useRef(useEnemyStore.getState().enemies);
+  const objectivesRef = useRef(useLevelManager.getState().currentLevelObjectives || []);
+  const wallsRef = useRef(useLevelManager.getState().currentLevelWalls || []);
+  
+  // Set up subscription to update values when they change
+  useEffect(() => {
+    const unsubPlayer = usePlayerStore.subscribe(
+      state => {
+        playerPositionRef.current = state.position;
+        playerRotationRef.current = state.rotation;
+      }
+    );
+    
+    const unsubEnemies = useEnemyStore.subscribe(
+      state => {
+        enemiesRef.current = state.enemies;
+      }
+    );
+    
+    const unsubLevel = useLevelManager.subscribe(
+      state => {
+        objectivesRef.current = state.currentLevelObjectives || [];
+        wallsRef.current = state.currentLevelWalls || [];
+      }
+    );
+    
+    return () => {
+      unsubPlayer();
+      unsubEnemies();
+      unsubLevel();
+    };
+  }, []);
+  
+  // Set up the canvas when component mounts
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (canvas) {
+      canvas.width = size;
+      canvas.height = size;
+    }
+  }, [size]);
+
+  // Memoize renderMinimap function
+  const renderMinimap = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     
-    const ctx = canvas.getContext("2d");
+    const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    
+    // Get current state values from refs
+    const playerPosition = playerPositionRef.current;
+    const playerRotation = playerRotationRef.current;
+    const enemies = enemiesRef.current;
+    const objectives = objectivesRef.current;
+    const walls = wallsRef.current;
     
     // Clear the canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
-    // Set the center of the minimap
-    const centerX = canvas.width / 2;
-    const centerY = canvas.height / 2;
-    
-    // Draw background
-    ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+    // Set background
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     
-    // Draw walls if available
+    // Draw world boundaries or walls if available
     if (walls && walls.length > 0) {
-      ctx.fillStyle = "#555";
+      ctx.strokeStyle = '#555';
+      ctx.lineWidth = 1;
       
-      walls.forEach((wall) => {
-        const relX = (wall.position[0] - playerPosition[0]) * scale;
-        const relZ = (wall.position[2] - playerPosition[2]) * scale;
+      walls.forEach(wall => {
+        // Skip if the wall is too far from player to be in minimap
+        if (!wall.position) return;
         
-        const x = centerX + relX;
-        const y = centerY + relZ;
+        const relX = (wall.position.x - playerPosition[0]) * scale + size / 2;
+        const relZ = (wall.position.z - playerPosition[2]) * scale + size / 2;
         
-        ctx.fillRect(
-          x - (wall.size[0] * scale) / 2,
-          y - (wall.size[2] * scale) / 2,
-          wall.size[0] * scale,
-          wall.size[2] * scale
-        );
+        // Only draw if within the minimap view
+        if (relX >= 0 && relX <= size && relZ >= 0 && relZ <= size) {
+          const wallSize = (wall.size || 1) * scale;
+          ctx.fillStyle = '#555';
+          ctx.fillRect(
+            relX - wallSize / 2,
+            relZ - wallSize / 2,
+            wallSize,
+            wallSize
+          );
+        }
       });
     }
     
-    // Draw objectives if enabled
+    // Draw objectives if enabled and available
     if (showObjectives && objectives && objectives.length > 0) {
-      ctx.fillStyle = "#ffcc00";
+      ctx.fillStyle = '#ffcc00';
       
-      objectives.forEach((objective) => {
-        const relX = (objective.position[0] - playerPosition[0]) * scale;
-        const relZ = (objective.position[2] - playerPosition[2]) * scale;
+      objectives.forEach(objective => {
+        if (!objective.position) return;
         
-        const x = centerX + relX;
-        const y = centerY + relZ;
+        const relX = (objective.position.x - playerPosition[0]) * scale + size / 2;
+        const relZ = (objective.position.z - playerPosition[2]) * scale + size / 2;
         
-        ctx.beginPath();
-        ctx.arc(x, y, 4, 0, Math.PI * 2);
-        ctx.fill();
+        // Only draw if within the minimap view
+        if (relX >= 0 && relX <= size && relZ >= 0 && relZ <= size) {
+          ctx.beginPath();
+          ctx.arc(relX, relZ, 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
       });
     }
     
-    // Draw enemies if enabled
+    // Draw enemies if enabled and available
     if (showEnemies && enemies && enemies.length > 0) {
-      ctx.fillStyle = "#ff0000";
+      ctx.fillStyle = '#ff4444';
       
-      enemies.forEach((enemy) => {
-        const relX = (enemy.position[0] - playerPosition[0]) * scale;
-        const relZ = (enemy.position[2] - playerPosition[2]) * scale;
+      enemies.forEach(enemy => {
+        if (enemy.isDead) return; // Don't show dead enemies
         
-        const x = centerX + relX;
-        const y = centerY + relZ;
+        const relX = (enemy.position.x - playerPosition[0]) * scale + size / 2;
+        const relZ = (enemy.position.z - playerPosition[2]) * scale + size / 2;
         
-        ctx.beginPath();
-        ctx.arc(x, y, 3, 0, Math.PI * 2);
-        ctx.fill();
+        // Only draw if within the minimap view
+        if (relX >= 0 && relX <= size && relZ >= 0 && relZ <= size) {
+          // Enemies that are alerted have a different appearance
+          if (enemy.isAlerted) {
+            ctx.fillStyle = '#ff2222';
+            ctx.beginPath();
+            ctx.arc(relX, relZ, 3, 0, Math.PI * 2);
+            ctx.fill();
+          } else {
+            ctx.fillStyle = '#ff6666';
+            ctx.beginPath();
+            ctx.arc(relX, relZ, 2, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
       });
     }
     
-    // Draw player in the center (as a triangle pointing in the direction)
-    ctx.save();
-    ctx.translate(centerX, centerY);
-    ctx.rotate(playerRotation[1]); // Use y-rotation for player direction
-    
-    ctx.fillStyle = "#00aaff";
+    // Draw player (always in center)
+    ctx.fillStyle = '#44aaff';
     ctx.beginPath();
-    ctx.moveTo(0, -6); // Point in the direction the player is facing
-    ctx.lineTo(-4, 4);
-    ctx.lineTo(4, 4);
-    ctx.closePath();
+    ctx.arc(size / 2, size / 2, 4, 0, Math.PI * 2);
     ctx.fill();
     
-    ctx.restore();
+    // Draw player direction
+    const dirLength = 8;
+    // Add null check to ensure playerRotation exists and has index 1
+    const rotationAngle = playerRotation && playerRotation[1] ? playerRotation[1] : 0;
+    const dirX = size / 2 + Math.sin(rotationAngle) * dirLength;
+    const dirZ = size / 2 + Math.cos(rotationAngle) * dirLength;
     
-    // Draw border
-    ctx.strokeStyle = borderColor;
+    ctx.strokeStyle = '#44aaff';
     ctx.lineWidth = 2;
-    ctx.strokeRect(0, 0, canvas.width, canvas.height);
-  });
+    ctx.beginPath();
+    ctx.moveTo(size / 2, size / 2);
+    ctx.lineTo(dirX, dirZ);
+    ctx.stroke();
+  }, [size, scale, showEnemies, showObjectives]);
 
+  // Use requestAnimationFrame instead of useFrame
+  useEffect(() => {
+    const animate = () => {
+      renderMinimap();
+      animationFrameRef.current = requestAnimationFrame(animate);
+    };
+    
+    // Start the animation
+    animationFrameRef.current = requestAnimationFrame(animate);
+    
+    // Clean up
+    return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+    };
+  }, [renderMinimap]);
+  
   return (
-    <div
-      className="absolute pointer-events-none"
+    <div 
+      className="absolute rounded-full overflow-hidden border-2"
       style={{
         width: `${size}px`,
         height: `${size}px`,
-        top: position.top !== undefined ? `${position.top}px` : "auto",
-        right: position.right !== undefined ? `${position.right}px` : "auto",
-        bottom: position.bottom !== undefined ? `${position.bottom}px` : "auto",
-        left: position.left !== undefined ? `${position.left}px` : "auto",
+        top: position.top ? `${position.top}px` : 'auto',
+        right: position.right ? `${position.right}px` : 'auto',
+        bottom: position.bottom ? `${position.bottom}px` : 'auto',
+        left: position.left ? `${position.left}px` : 'auto',
+        borderColor: borderColor
       }}
     >
-      <canvas
+      <canvas 
         ref={canvasRef}
         width={size}
         height={size}
-        className="rounded-lg shadow-lg"
+        className="w-full h-full"
       />
     </div>
   );

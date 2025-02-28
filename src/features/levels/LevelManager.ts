@@ -17,12 +17,16 @@ interface LevelManagerState {
   currentLevelId: string | null;
   levelsUnlocked: string[];
   isLoading: boolean;
+  currentLevelWalls: Array<{ position?: { x: number, y: number, z: number }, size?: number }>;
+  currentLevelObjectives: Array<{ position?: { x: number, y: number, z: number }, completed?: boolean, description?: string }>;
   
   // Actions
   setCurrentLevel: (levelId: string) => void;
   unlockLevel: (levelId: string) => void;
   completeLevel: (levelId: string) => void;
   resetProgress: () => void;
+  setLevelWalls: (walls: Array<{ position?: { x: number, y: number, z: number }, size?: number }>) => void;
+  setLevelObjectives: (objectives: Array<{ position?: { x: number, y: number, z: number }, completed?: boolean, description?: string }>) => void;
 }
 
 // Initialize with predefined levels
@@ -66,6 +70,8 @@ export const useLevelManager = create<LevelManagerState>((set, get) => ({
   currentLevelId: null,
   levelsUnlocked: ["tutorial"], // Only tutorial is unlocked initially
   isLoading: false,
+  currentLevelWalls: [],
+  currentLevelObjectives: [],
   
   setCurrentLevel: (levelId: string) => {
     const { changeLevel } = useGameStore.getState();
@@ -122,7 +128,17 @@ export const useLevelManager = create<LevelManagerState>((set, get) => ({
     set({
       levels: { ...initialLevels }, // Reset completion status
       levelsUnlocked: ["tutorial"], // Only tutorial is unlocked initially
-      currentLevelId: null
+      currentLevelId: null,
+      currentLevelWalls: [],
+      currentLevelObjectives: []
     });
+  },
+  
+  setLevelWalls: (walls) => {
+    set({ currentLevelWalls: walls });
+  },
+  
+  setLevelObjectives: (objectives) => {
+    set({ currentLevelObjectives: objectives });
   }
 }));

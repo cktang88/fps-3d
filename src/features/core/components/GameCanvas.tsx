@@ -4,7 +4,8 @@ import { Physics } from "@react-three/rapier";
 import { Sky, Environment, KeyboardControls } from "@react-three/drei";
 import { PlayerController } from "../../player/components/PlayerController";
 import { TestLevel } from "../../levels/components/TestLevel";
-import { HUD } from "../../ui/components/HUD";
+import { EnhancedHUD } from "../../ui/components/EnhancedHUD";
+import { Minimap } from "../../ui/components/Minimap";
 
 /**
  * Main game canvas component
@@ -50,7 +51,12 @@ export function GameCanvas() {
         </Canvas>
         
         {/* HUD overlays the Canvas */}
-        <HUD showCrosshair={true} />
+        <div className="pointer-events-none">
+          <EnhancedHUD showCrosshair={true} showObjective={true} />
+          <div className="absolute top-6 right-6 w-40 h-40">
+            <Minimap />
+          </div>
+        </div>
       </KeyboardControls>
     </div>
   );

@@ -5,6 +5,7 @@ import { RigidBody, CuboidCollider } from "@react-three/rapier";
 import { useGLTF } from "@react-three/drei";
 import { a, useSpring } from "@react-spring/three";
 import { EnemyProjectile } from "./EnemyProjectile";
+import { useEnemyStore } from "../stores/enemyStore";
 
 // Define available enemy types
 export type EnemyType = "grunt" | "soldier" | "commander";
@@ -45,6 +46,7 @@ export function Enemy({ type, position, onDeath }: EnemyProps) {
   const [target, setTarget] = useState<Vector3 | null>(null);
   const [lastAttackTime, setLastAttackTime] = useState(0);
   const [isDead, setIsDead] = useState(false);
+  const [enemyId, setEnemyId] = useState<string>("");
   
   // Enemy movement
   const velocity = useRef(new Vector3());
@@ -276,13 +278,74 @@ export function Enemy({ type, position, onDeath }: EnemyProps) {
     });
   };
   
+  const enemyStore = useEnemyStore();
+
+  // Register with enemy store on mount
+  useEffect(() => {
+    // Convert position array to object format for the store
+    const posObj = {
+      x: position[0],
+      y: position[1], 
+      z: position[2]
+    };
+    
+    // Add enemy to store and save the ID
+    const id = enemyStore.addEnemy({
+      type,
+      position: posObj,
+      health: ENEMY_HEALTH[type],
+      maxHealth: ENEMY_HEALTH[type],
+      isDead: false,
+      isAlerted: false,
+      lastAttackTime: 0
+    });
+    
+    setEnemyId(id);
+
+    // Cleanup on unmount
+    return () => {
+      if (enemyId) {
+        enemyStore.removeEnemy(enemyId);
+      }
+    };
+  }, []);
+
+  // Update position in store when it changes
+  useFrame(() => {
+    if (enemyId && enemyRef.current) {
+      const currentPos = enemyRef.current.position;
+      
+      // Get player position for distance calculation
+      const playerPosition = target ? new Vector3().copy(target) : new Vector3();
+      const enemyPosition = new Vector3(currentPos.x, currentPos.y, currentPos.z);
+      const distanceToPlayer = target ? enemyPosition.distanceTo(playerPosition) : Infinity;
+      
+      enemyStore.updateEnemy(enemyId, {
+        position: {
+          x: currentPos.x,
+          y: currentPos.y,
+          z: currentPos.z
+        },
+        isDead,
+        isAlerted: distanceToPlayer < ENEMY_ATTACK[type].range
+      });
+    }
+  });
+
+  // Update enemy health in store when it changes
+  useEffect(() => {
+    if (enemyId) {
+      enemyStore.updateEnemy(enemyId, { health, isDead });
+    }
+  }, [health, isDead]);
+
   // Expose takeDamage method to parent
   useEffect(() => {
     if (enemyRef.current) {
       (enemyRef.current as any).takeDamage = takeDamage;
     }
   }, [enemyRef.current]);
-  
+
   return (
     <>
       <a.group

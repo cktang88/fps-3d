@@ -51,10 +51,17 @@ function App() {
         <GameCanvas />
       </div>
 
+      {/* Game UI overlays (visible when game is active but menu is not showing) */}
+      {gameStarted && !showMenu && !isDead && (
+        <div className="absolute inset-0 z-5 pointer-events-none">
+          {/* Any additional UI elements that should overlay the game can go here */}
+        </div>
+      )}
+
       {/* Menu Overlay */}
       {showMenu && (
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-black bg-opacity-80">
-          <div className="bg-gray-900 p-8 rounded-lg max-w-md text-center shadow-2xl">
+          <div className="bg-gray-900 p-8 rounded-lg max-w-md text-center shadow-2xl border border-gray-700">
             <h1 className="text-4xl font-bold text-red-600 mb-6">FPS 3D</h1>
 
             <p className="text-gray-300 mb-8">
@@ -92,10 +99,10 @@ function App() {
               </>
             )}
 
-            <div className="mt-8 text-gray-400 text-sm">
-              <p>Controls:</p>
-              <p>WASD - Move | SPACE - Jump | SHIFT - Sprint | CTRL - Slide</p>
-              <p>MOUSE - Aim | LEFT CLICK - Shoot | R - Reload</p>
+            <div className="mt-8 text-gray-400 text-sm p-4 bg-gray-800 rounded-lg">
+              <p className="font-bold mb-2">Controls:</p>
+              <p className="mb-1">WASD - Move | SPACE - Jump | SHIFT - Sprint | CTRL - Slide</p>
+              <p className="mb-1">MOUSE - Aim | LEFT CLICK - Shoot | R - Reload</p>
               <p>ESC - Menu</p>
             </div>
           </div>
