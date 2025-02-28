@@ -1,117 +1,176 @@
-import { useRef, useEffect } from "react";
-import { useFrame } from "@react-three/fiber";
+import { useRef, useState, useEffect } from "react";
+import { useFrame, useThree } from "@react-three/fiber";
 import { Vector3, Group } from "three";
-import { RigidBody, CuboidCollider } from "@react-three/rapier";
+import { RigidBody, CuboidCollider, useRapier, RaycastOptions } from "@react-three/rapier";
 import { useGLTF } from "@react-three/drei";
+import { useEnemyStore } from "../stores/enemyStore";
+import { EnemyType } from "./Enemy";
 
 export interface EnemyProjectileProps {
   position: [number, number, number];
-  direction: Vector3;
-  speed?: number;
+  velocity: [number, number, number];
   damage?: number;
+  type: EnemyType;
+  id: string;
   onHit?: (position: [number, number, number]) => void;
-  lifespan?: number; // milliseconds
 }
 
 export function EnemyProjectile({
   position,
-  direction,
-  speed = 15,
+  velocity,
   damage = 10,
-  onHit,
-  lifespan = 2000,
+  type,
+  id,
+  onHit
 }: EnemyProjectileProps) {
+  const { scene } = useThree();
   const projectileRef = useRef<Group>(null);
-  const normalizedDirection = direction.clone().normalize();
-  const creationTime = useRef(Date.now());
-  const hasHit = useRef(false);
+  const rigidBodyRef = useRef<any>(null);
+  const enemyStore = useEnemyStore();
+  const [hasHit, setHasHit] = useState(false);
+  const { raycast } = useRapier();
   
-  // Move projectile in direction
-  useFrame((_, delta) => {
-    if (projectileRef.current && !hasHit.current) {
-      // Move in direction at constant speed
-      projectileRef.current.position.x += normalizedDirection.x * speed * delta;
-      projectileRef.current.position.y += normalizedDirection.y * speed * delta;
-      projectileRef.current.position.z += normalizedDirection.z * speed * delta;
-      
-      // Check lifetime
-      if (Date.now() - creationTime.current > lifespan) {
-        hasHit.current = true;
-        if (onHit) {
-          const currentPos: [number, number, number] = [
-            projectileRef.current.position.x,
-            projectileRef.current.position.y,
-            projectileRef.current.position.z,
-          ];
-          onHit(currentPos);
+  // Projectile lifetime management
+  useEffect(() => {
+    // Remove projectile after 5 seconds if it hasn't hit anything
+    const timeout = setTimeout(() => {
+      if (!hasHit) {
+        // Mark as hit first to prevent multiple removal attempts
+        setHasHit(true);
+        // Add a small delay before store removal to allow physics cleanup
+        setTimeout(() => {
+          enemyStore.removeProjectile(id);
+        }, 50);
+      }
+    }, 5000);
+    
+    return () => clearTimeout(timeout);
+  }, [id, hasHit, enemyStore]);
+  
+  // Disable physics before unmounting
+  useEffect(() => {
+    return () => {
+      // Attempt to disable the rigid body before React unmounts it
+      if (rigidBodyRef.current) {
+        try {
+          rigidBodyRef.current.setEnabled(false);
+        } catch (e) {
+          // Silently catch any errors during cleanup
+          console.warn("Error during projectile cleanup:", e);
         }
+      }
+    };
+  }, []);
+
+  // Update projectile position and check for collisions
+  useFrame(() => {
+    if (hasHit || !rigidBodyRef.current) return;
+    
+    const position = rigidBodyRef.current.translation();
+    
+    // Set up ray for collision detection
+    const rayOrigin = new Vector3(position.x, position.y, position.z);
+    const rayDirection = new Vector3(velocity[0], velocity[1], velocity[2]).normalize();
+    
+    // Cast ray to detect collisions
+    const raycastResult = raycast({
+      origin: rayOrigin,
+      direction: rayDirection,
+      maxToi: 0.5, // Distance to check ahead
+      excludeCollider: rigidBodyRef.current
+    });
+    
+    if (raycastResult.hasHit) {
+      const hitObject = raycastResult.collider.parent();
+      const hitObjectName = hitObject?.name || '';
+      
+      // Handle collision with player
+      if (hitObjectName.includes('player')) {
+        console.log('Player hit by projectile');
+        // Get player via scene and apply damage
+        const playerObjects = scene.children.filter(obj => 
+          obj.name?.includes('player') && obj.userData?.takeDamage
+        );
+        
+        if (playerObjects.length > 0 && playerObjects[0].userData?.takeDamage) {
+          playerObjects[0].userData.takeDamage(damage);
+        }
+        
+        // Create hit effect at impact point
+        if (onHit) {
+          const hitPosition: [number, number, number] = [
+            raycastResult.point.x,
+            raycastResult.point.y,
+            raycastResult.point.z
+          ];
+          onHit(hitPosition);
+        }
+        
+        // Mark as hit first, then remove from store with slight delay
+        setHasHit(true);
+        setTimeout(() => {
+          enemyStore.removeProjectile(id);
+        }, 50);
+      }
+      // Handle collision with environment
+      else if (!hitObjectName.includes('enemy')) {
+        // Create hit effect at impact point for environment hits
+        if (onHit) {
+          const hitPosition: [number, number, number] = [
+            raycastResult.point.x,
+            raycastResult.point.y,
+            raycastResult.point.z
+          ];
+          onHit(hitPosition);
+        }
+        
+        // Mark as hit first, then remove from store with slight delay
+        setHasHit(true);
+        setTimeout(() => {
+          enemyStore.removeProjectile(id);
+        }, 50);
       }
     }
   });
   
-  // Handle collision events
-  const handleCollision = (e: any) => {
-    if (hasHit.current) return;
-    
-    // Ignore collisions with other enemy projectiles
-    if (e.other.rigidBodyObject?.name === 'enemy-projectile') return;
-    
-    hasHit.current = true;
-    
-    // Check if hit player
-    if (e.other.rigidBodyObject?.name === 'player') {
-      // Player hit logic would go here
-      console.log('Player hit by enemy projectile');
-      
-      // In a real implementation, this would trigger player damage
-      // e.g., playerRef.current.takeDamage(damage);
-    }
-    
-    if (onHit && projectileRef.current) {
-      const hitPos: [number, number, number] = [
-        projectileRef.current.position.x,
-        projectileRef.current.position.y,
-        projectileRef.current.position.z,
-      ];
-      onHit(hitPos);
+  // Render different projectile styles based on enemy type
+  const getProjectileColor = () => {
+    switch (type) {
+      case 'grunt': return '#ff5500';
+      case 'soldier': return '#ff0000';
+      case 'commander': return '#aa00ff';
+      default: return '#ff0000';
     }
   };
   
-  // Clean up after lifespan is over
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      if (!hasHit.current && onHit && projectileRef.current) {
-        hasHit.current = true;
-        const finalPos: [number, number, number] = [
-          projectileRef.current.position.x,
-          projectileRef.current.position.y,
-          projectileRef.current.position.z,
-        ];
-        onHit(finalPos);
-      }
-    }, lifespan);
-    
-    return () => clearTimeout(timer);
-  }, []);
-  
   return (
-    <group ref={projectileRef} position={position} name="enemy-projectile">
-      <RigidBody
-        type="dynamic"
-        colliders={false}
-        gravityScale={0}
-        canSleep={false}
-        onCollisionEnter={handleCollision}
-        sensor
-      >
-        <CuboidCollider args={[0.1, 0.1, 0.1]} />
-        
-        {/* Visual representation */}
+    <RigidBody
+      ref={rigidBodyRef}
+      position={position}
+      type="dynamic"
+      colliders={false}
+      gravityScale={0}
+      linearVelocity={velocity}
+      name={`projectile-${id}`}
+      userData={{ isEnemyProjectile: true }}
+      enabled={!hasHit} // Disable physics when hit
+    >
+      <CuboidCollider args={[0.05, 0.05, 0.05]} sensor />
+      <group ref={projectileRef}>
         <mesh castShadow>
-          <sphereGeometry args={[0.15, 8, 8]} />
-          <meshStandardMaterial color="#ff3300" emissive="#ff0000" emissiveIntensity={2} />
+          <sphereGeometry args={[0.1, 8, 8]} />
+          <meshStandardMaterial 
+            emissive={getProjectileColor()} 
+            emissiveIntensity={2} 
+            color={getProjectileColor()} 
+          />
         </mesh>
-      </RigidBody>
-    </group>
+        <pointLight 
+          color={getProjectileColor()} 
+          intensity={1} 
+          distance={2} 
+        />
+      </group>
+    </RigidBody>
   );
 }

@@ -13,6 +13,7 @@ import {
   ImpactEffect,
 } from "../../weapons/components/ShootingEffects";
 import { usePlayerStore } from "../stores/playerStore";
+import { useEnemyStore } from "../../enemies/stores/enemyStore"; // Fix import path
 
 // Extend Window interface to store camera reference
 declare global {
@@ -74,6 +75,7 @@ export function PlayerController({
   const directionOffset = useRef<number>(0);
   const raycaster = useRef(new Raycaster());
   const screenCenter = useRef(new Vector2(0, 0));
+  const lastTakeDamageTime = useRef<number>(0);
 
   // Get camera and physics from three.js context
   const { camera } = useThree();
@@ -112,114 +114,119 @@ export function PlayerController({
     }
   }, [position]);
 
-  // Handle input and physics updates
-  useFrame((state, delta) => {
-    if (isDead || !playerRef.current) return;
+  // Update camera and model positions
+  useFrame((_, delta) => {
+    if (!playerRef.current || isDead) return;
 
-    const body = playerRef.current;
-    const bodyPosition = body.translation();
+    const playerPos = playerRef.current.translation();
+    const newPosition: [number, number, number] = [playerPos.x, playerPos.y, playerPos.z];
+    
+    // Update position state
+    // setPosition(newPosition);
+    
+    // Update model position directly to match rigid body
+    if (modelRef.current) {
+      modelRef.current.position.set(playerPos.x, playerPos.y, playerPos.z);
+    }
+    
+    // Update camera position - safely handle camera reference
+    if (cameraRef.current) {
+      if (typeof cameraRef.current.setPosition === 'function') {
+        cameraRef.current.setPosition([playerPos.x, playerPos.y + 0.8, playerPos.z]);
+      } 
+    } else if (camera) {
+      // Fallback to using the global camera
+      camera.position.set(playerPos.x, playerPos.y + 0.8, playerPos.z);
+    }
 
-    // Get linear velocity for current frame
-    const linearVel = body.linvel();
+    // Jumping logic
+    if (inputState.jump) {
+      // Only allow jumping if we're on the ground and jump timer expired
+      if (groundSensor.current && jumpTimer.current <= 0) {
+        const jumpStrength = jumpForce;
+        playerRef.current.applyImpulse({ x: 0, y: jumpStrength, z: 0 }, true);
+        jumpTimer.current = 0.3; // Cooldown between jumps
+      }
+    }
 
-    // Get input state
-    const { jump, forward, right } = inputState.movement;
-
-    // Update ground state
+    // Update jump timer
     if (jumpTimer.current > 0) {
       jumpTimer.current -= delta;
     }
 
-    setIsGrounded(groundSensor.current && jumpTimer.current <= 0);
+    // Handle movement
+    const { forward, backward, left, right } = inputState.movement;
+    
+    // Get current velocity
+    const playerVelocity = playerRef.current.linvel();
+    
+    // Preserve Y velocity (gravity/jump)
+    const currentVelY = playerVelocity.y;
 
-    // Calculate movement direction based on camera orientation
-    velocity.current.set(0, 0, 0);
-
-    if (forward !== 0 || right !== 0) {
-      // Convert from screen space to world space direction
-      const cameraDirection = new Vector3();
-      camera.getWorldDirection(cameraDirection);
-      cameraDirection.y = 0;
-      cameraDirection.normalize();
-
-      // Calculate forward direction
-      const forwardDirection = cameraDirection.clone().multiplyScalar(forward);
-
-      // Calculate right direction (perpendicular to forward)
-      const rightDirection = new Vector3(
-        -cameraDirection.z,
-        0,
-        cameraDirection.x
-      ).multiplyScalar(right);
-
-      // Combine directions
-      velocity.current.add(forwardDirection).add(rightDirection);
-
-      // Normalize if moving diagonally
-      if (velocity.current.length() > 1) {
-        velocity.current.normalize();
-      }
-
-      // Scale by movement speed
-      velocity.current.multiplyScalar(moveSpeed);
-
-      // Preserve vertical velocity (gravity, jumping)
-      velocity.current.y = linearVel.y;
-
-      // Debug movement
-      if (DEBUG && Math.random() < 0.02) {
-        debugLog(
-          `Movement - Forward: ${forward.toFixed(2)}, Right: ${right.toFixed(
-            2
-          )}`
-        );
-        debugLog(
-          `Velocity: ${velocity.current.x.toFixed(
-            2
-          )}, ${velocity.current.y.toFixed(2)}, ${velocity.current.z.toFixed(
-            2
-          )}`
-        );
-      }
+    // Get camera direction
+    const cameraQuat = camera.quaternion.clone();
+    
+    // We only want rotation around Y axis (horizontal rotation)
+    cameraQuat.x = 0;
+    cameraQuat.z = 0;
+    cameraQuat.normalize();
+    
+    // Calculate move direction based on inputs and camera rotation
+    const moveDirection = new Vector3(0, 0, 0);
+    
+    if (forward) moveDirection.z -= 1;
+    if (backward) moveDirection.z += 1;
+    if (left) moveDirection.x -= 1;
+    if (right) moveDirection.x += 1;
+    
+    if (moveDirection.length() > 0) {
+      moveDirection.normalize();
+      moveDirection.applyQuaternion(cameraQuat);
+      
+      // Apply movement with gradual acceleration for better control
+      velocity.current.x = moveDirection.x * moveSpeed;
+      velocity.current.z = moveDirection.z * moveSpeed;
     } else {
-      // No horizontal movement, preserve vertical velocity
-      velocity.current.set(0, linearVel.y, 0);
+      // Gradual deceleration when no input
+      velocity.current.x *= 0.9;
+      velocity.current.z *= 0.9;
+      
+      // Stop completely if very slow
+      if (Math.abs(velocity.current.x) < 0.01) velocity.current.x = 0;
+      if (Math.abs(velocity.current.z) < 0.01) velocity.current.z = 0;
     }
-
-    // Jump handling
-    if (jump && isGrounded) {
-      velocity.current.y = jumpForce;
-      setIsJumping(true);
-      jumpTimer.current = 0.3; // Prevent immediate re-jumping
-      debugLog("Jumping");
-    }
-
-    // Apply velocity to physics body
-    body.setLinvel(
-      { x: velocity.current.x, y: velocity.current.y, z: velocity.current.z },
+    
+    // Apply velocity to rigid body
+    playerRef.current.setLinvel(
+      { 
+        x: velocity.current.x, 
+        y: currentVelY, // Preserve y velocity for gravity/jumping
+        z: velocity.current.z 
+      }, 
       true
     );
-
-    // Update model position to match physics body
-    if (modelRef.current) {
-      modelRef.current.position.set(
-        bodyPosition.x,
-        bodyPosition.y - 0.8,
-        bodyPosition.z
-      );
-    }
-
-    // Update camera to follow player position
-    // This updates the Y position from physics (jumping/falling)
-    // The X/Z position is handled by the FirstPersonCamera movement
-    if (window.camera) {
-      window.camera.position.y = bodyPosition.y + 0.8; // Position at eye level
-    }
   });
+
+  // Update enemy store with player position for enemy targeting
+  useEffect(() => {
+    const enemyStore = useEnemyStore.getState();
+    if (enemyStore) {
+      // Update on position changes
+      enemyStore.updatePlayerPosition({
+        x: position[0],
+        y: position[1],
+        z: position[2]
+      });
+    }
+  }, [position]);
 
   // Handle player damage
   const takeDamage = (amount: number) => {
     if (isDead) return;
+
+    const currentTime = Date.now();
+    if (currentTime - lastTakeDamageTime.current < 100) return;
+    lastTakeDamageTime.current = currentTime;
 
     setHealth((prev) => {
       const newHealth = Math.max(0, prev - amount);
@@ -327,11 +334,13 @@ export function PlayerController({
       const rayOriginPhysics = { x: rayOrigin.x, y: rayOrigin.y, z: rayOrigin.z };
       const ray = new rapier.Ray(rayOriginPhysics, rayDirPhysics);
 
-      // Cast the ray
-      const hit = world.castRay(
+      // Cast the ray with proper filter
+      const maxToi = currentWeaponData.range; // Maximum range
+      const solid = true; // Only report solid objects
+      const hit = world.castRayAndGetNormal(
         ray,
-        currentWeaponData.range,
-        true
+        maxToi,
+        solid
       );
 
       // Default end position (if no hit)
@@ -341,7 +350,7 @@ export function PlayerController({
         rayOrigin.z + rayDirection.z * currentWeaponData.range,
       ];
 
-      const normalVector: [number, number, number] = [0, 0, 0];
+      let normalVector: [number, number, number] = [0, 1, 0];
 
       // If we hit something
       if (hit) {
@@ -350,6 +359,10 @@ export function PlayerController({
         endPosition[1] = hitPoint.y;
         endPosition[2] = hitPoint.z;
 
+        // Extract normal from the hit
+        normalVector = [hit.normal.x, hit.normal.y, hit.normal.z];
+
+        // If the collider has a parent (usually means it's an entity)
         if (hit.collider.parent()) {
           const hitObject = hit.collider.parent().userData;
 
@@ -457,14 +470,15 @@ export function PlayerController({
         position={position}
         enabledRotations={[false, false, false]}
         lockRotations
+        userData={{ type: "player", takeDamage }}
       >
         {/* Player collider */}
-        <CapsuleCollider args={[0.4, 0.4]} />
+        <CapsuleCollider args={[0.4, 0.8]} />
 
         {/* Ground sensor for jump detection */}
         <CuboidCollider
           args={[0.2, 0.1, 0.2]}
-          position={[0, -0.5, 0]}
+          position={[0, -0.9, 0]}
           sensor
           onIntersectionEnter={onSensorCollisionEnter}
           onIntersectionExit={onSensorCollisionExit}
@@ -487,7 +501,7 @@ export function PlayerController({
         ref={cameraRef}
       />
 
-      {/* Weapon model - positioned to be more visible */}
+      {/* Weapon model - now passes the player ref to attach to it */}
       <Weapon
         type={currentWeapon}
         position={weaponPosition}
@@ -495,6 +509,7 @@ export function PlayerController({
         maxAmmo={weaponStats[currentWeapon].maxAmmo}
         onFire={handleFire}
         onReload={handleReload}
+        playerRef={playerRef}
       />
 
       {/* Visual effects */}

@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import { Vector3, Group } from "three";
 import { Enemy, EnemyType } from "./Enemy";
+import { useEnemyStore } from "../stores/enemyStore";
+import { EnemyProjectile } from "./EnemyProjectile";
 
 // Types for spawn points
 export interface SpawnPoint {
@@ -31,11 +33,7 @@ export function EnemySpawner({
   active = true,
 }: EnemySpawnerProps) {
   // Track enemies
-  const [enemies, setEnemies] = useState<{
-    id: string;
-    type: EnemyType;
-    position: [number, number, number];
-  }[]>([]);
+  const { enemies, addEnemy, removeEnemy } = useEnemyStore();
   
   // Track spawn points
   const [spawns, setSpawns] = useState<SpawnPoint[]>([]);
@@ -118,7 +116,7 @@ export function EnemySpawner({
   
   // Handle enemy death
   const handleEnemyDeath = (id: string, position: [number, number, number]) => {
-    setEnemies((prev) => prev.filter((enemy) => enemy.id !== id));
+    removeEnemy(id);
     
     if (waveMode && waveActive) {
       setWaveEnemiesRemaining((prev) => prev - 1);
@@ -178,7 +176,7 @@ export function EnemySpawner({
     const position = getRandomSpawnPosition();
     const id = `enemy-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     
-    setEnemies((prev) => [...prev, { id, type, position }]);
+    addEnemy({ id, type, position });
   };
   
   // Update logic

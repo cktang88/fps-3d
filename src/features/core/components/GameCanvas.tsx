@@ -6,6 +6,7 @@ import { PlayerController } from "../../player/components/PlayerController";
 import { TestLevel } from "../../levels/components/TestLevel";
 import { EnhancedHUD } from "../../ui/components/EnhancedHUD";
 import { Minimap } from "../../ui/components/Minimap";
+import { EnemyProjectileManager } from "../../enemies/components/EnemyProjectileManager";
 
 /**
  * Main game canvas component
@@ -54,6 +55,9 @@ export function GameCanvas() {
 
               {/* Player */}
               <PlayerController position={[0, 2, 0]} />
+              
+              {/* Enemy projectiles */}
+              <EnemyProjectileManager />
             </Suspense>
           </Physics>
         </Canvas>

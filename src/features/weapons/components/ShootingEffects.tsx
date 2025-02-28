@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
-import { PointLight, SpotLight } from '@react-three/drei';
-import { Color, Vector3 } from 'three';
+import { SpotLight } from '@react-three/drei';
+import { Color, Vector3, PointLight } from 'three';
 
 // Visual muzzle flash effect when shooting
 export function MuzzleFlash({ 
@@ -151,6 +151,42 @@ export function ImpactEffect({
           opacity={1}
         />
       </mesh>
+    </group>
+  );
+}
+
+// Main component to handle all shooting effects
+export function ShootingEffects({
+  active = false,
+  position = [0, 0, 0],
+  type = "pistol",
+}) {
+  // Different effects based on weapon type
+  const getEffectColor = () => {
+    switch (type) {
+      case "pistol":
+        return "#ffaa00";
+      case "shotgun":
+        return "#ff7700";
+      case "rifle":
+        return "#ff5500";
+      case "plasmagun":
+        return "#44aaff";
+      default:
+        return "#ffaa00";
+    }
+  };
+  
+  // Only render effects when active (shooting)
+  if (!active) return null;
+  
+  return (
+    <group position={position}>
+      <MuzzleFlash 
+        position={[0, 0, 0]}
+        color={getEffectColor()}
+        intensity={type === "plasmagun" ? 5 : 10}
+      />
     </group>
   );
 }

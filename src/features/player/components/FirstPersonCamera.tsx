@@ -43,6 +43,10 @@ export const FirstPersonCamera = forwardRef(({
   useImperativeHandle(ref, () => ({
     getControls: () => controlsRef.current,
     getLocked: () => isLocked.current,
+    getPosition: () => camera.position.clone(),
+    setPosition: (newPos: [number, number, number]) => {
+      camera.position.set(...newPos);
+    },
     moveForward: (distance: number) => {
       if (controlsRef.current) {
         controlsRef.current.moveForward(distance);
@@ -53,7 +57,7 @@ export const FirstPersonCamera = forwardRef(({
         controlsRef.current.moveRight(distance);
       }
     }
-  }), [controlsRef.current]);
+  }), [controlsRef.current, camera.position]);
 
   // Initialize camera position
   useEffect(() => {
@@ -144,7 +148,9 @@ export const FirstPersonCamera = forwardRef(({
     if (headBobEnabled && (forward !== 0 || right !== 0)) {
       headBobPhase.current += delta * headBobSpeed;
       const headBobY = Math.sin(headBobPhase.current) * headBobAmount;
-      camera.position.y = position[1] + headBobY;
+      const currentPos = camera.position.clone();
+      currentPos.y = position[1] + headBobY;
+      camera.position.copy(currentPos);
     }
     
     // Log camera position occasionally for debugging

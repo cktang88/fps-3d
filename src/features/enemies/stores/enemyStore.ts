@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { EnemyType } from "../components/Enemy";
+import { Vector3 } from "three";
 
 export interface EnemyData {
   id: string;
@@ -12,9 +13,24 @@ export interface EnemyData {
   lastAttackTime: number;
 }
 
+export interface ProjectileData {
+  id: string;
+  position: [number, number, number]; 
+  velocity: [number, number, number];
+  damage: number;
+  type: EnemyType;
+  createdAt: number;
+}
+
 interface EnemyState {
   // Collection of all enemies in the game
   enemies: EnemyData[];
+  
+  // Player data for targeting
+  player: { x: number, y: number, z: number } | null;
+  
+  // Projectiles
+  projectiles: ProjectileData[];
   
   // Counters and stats
   totalEnemies: number;
@@ -25,6 +41,16 @@ interface EnemyState {
   updateEnemy: (id: string, data: Partial<EnemyData>) => void;
   removeEnemy: (id: string) => void;
   getEnemyById: (id: string) => EnemyData | undefined;
+  
+  // Projectile operations
+  addProjectile: (projectile: Omit<ProjectileData, "id" | "createdAt">) => string;
+  removeProjectile: (id: string) => void;
+  getProjectiles: () => ProjectileData[];
+  clearProjectiles: () => void;
+  
+  // Player tracking
+  updatePlayerPosition: (position: { x: number, y: number, z: number }) => void;
+  getPlayer: () => { x: number, y: number, z: number } | null;
   
   // Batch operations
   updateEnemyPositions: (positions: { id: string, position: { x: number, y: number, z: number } }[]) => void;
@@ -39,6 +65,8 @@ interface EnemyState {
 export const useEnemyStore = create<EnemyState>()((set, get) => ({
   // Initial state
   enemies: [],
+  projectiles: [],
+  player: null,
   totalEnemies: 0,
   aliveEnemies: 0,
   
@@ -86,6 +114,45 @@ export const useEnemyStore = create<EnemyState>()((set, get) => ({
   
   getEnemyById: (id) => {
     return get().enemies.find((enemy) => enemy.id === id);
+  },
+  
+  // Projectile operations
+  addProjectile: (projectile) => {
+    const id = `proj-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    set((state) => ({
+      projectiles: [
+        ...state.projectiles,
+        {
+          id,
+          ...projectile,
+          createdAt: Date.now()
+        }
+      ]
+    }));
+    return id;
+  },
+  
+  removeProjectile: (id) => {
+    set((state) => ({
+      projectiles: state.projectiles.filter(p => p.id !== id)
+    }));
+  },
+  
+  getProjectiles: () => {
+    return get().projectiles;
+  },
+  
+  clearProjectiles: () => {
+    set({ projectiles: [] });
+  },
+  
+  // Player tracking
+  updatePlayerPosition: (position) => {
+    set({ player: position });
+  },
+  
+  getPlayer: () => {
+    return get().player;
   },
   
   // Batch operations

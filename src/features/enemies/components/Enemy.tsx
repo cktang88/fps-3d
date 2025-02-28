@@ -1,11 +1,11 @@
 import { useRef, useState, useEffect } from "react";
 import { useFrame } from "@react-three/fiber";
-import { Vector3, Group, Quaternion } from "three";
-import { RigidBody, CuboidCollider } from "@react-three/rapier";
+import { RigidBody, CuboidCollider, CapsuleCollider } from "@react-three/rapier";
+import { Vector3, Quaternion, Group } from "three";
+import { useSpring, animated } from "@react-spring/three";
 import { useGLTF } from "@react-three/drei";
-import { a, useSpring } from "@react-spring/three";
-import { EnemyProjectile } from "./EnemyProjectile";
 import { useEnemyStore } from "../stores/enemyStore";
+import { EnemyProjectile } from "./EnemyProjectile";
 
 // Define available enemy types
 export type EnemyType = "grunt" | "soldier" | "commander";
@@ -25,10 +25,10 @@ const ENEMY_SPEED: Record<EnemyType, number> = {
 };
 
 // Enemy attack properties
-const ENEMY_ATTACK: Record<EnemyType, { damage: number; rate: number; range: number; projectileSpeed: number }> = {
-  grunt: { damage: 10, rate: 1200, range: 10, projectileSpeed: 12 },
-  soldier: { damage: 15, rate: 800, range: 15, projectileSpeed: 15 },
-  commander: { damage: 25, rate: 1500, range: 20, projectileSpeed: 10 },
+const ENEMY_ATTACK: Record<EnemyType, { damage: number; rate: number; range: number; speed: number }> = {
+  grunt: { damage: 10, rate: 1200, range: 10, speed: 12 },
+  soldier: { damage: 15, rate: 800, range: 15, speed: 15 },
+  commander: { damage: 25, rate: 1500, range: 20, speed: 10 },
 };
 
 export interface EnemyProps {
@@ -39,7 +39,21 @@ export interface EnemyProps {
 
 export function Enemy({ type, position, onDeath }: EnemyProps) {
   const enemyRef = useRef<Group>(null);
-  const rigidBodyRef = useRef(null);
+  const modelRef = useRef<Group>(null);
+  const rigidBodyRef = useRef<RapierRigidBody>(null);
+  const playerPosition = useRef<Vector3>(new Vector3());
+  const playerPositionTrackingRef = useRef<Vector3>(new Vector3());
+  const lastShotTime = useRef<number>(0);
+  const lastShootAttempt = useRef<number>(Date.now());
+  const shootCooldown = useRef<number>(ENEMY_ATTACK[type].rate);
+  const turnSpeed = 3; // Speed at which enemy rotates toward player
+  
+  // AI state using refs for performance
+  const path = useRef<Vector3[]>([]);
+  const currentPathIndex = useRef<number>(0);
+  const isStuck = useRef<boolean>(false);
+  const stuckCheckTimer = useRef<number>(0);
+  const lastPosition = useRef<Vector3>(new Vector3());
   
   // State
   const [health, setHealth] = useState(ENEMY_HEALTH[type]);
@@ -47,13 +61,8 @@ export function Enemy({ type, position, onDeath }: EnemyProps) {
   const [lastAttackTime, setLastAttackTime] = useState(0);
   const [isDead, setIsDead] = useState(false);
   const [enemyId, setEnemyId] = useState<string>("");
-  
-  // Enemy movement
-  const velocity = useRef(new Vector3());
-  const direction = useRef(new Vector3());
-  
-  // Animation state
   const [animationState, setAnimationState] = useState<"idle" | "walking" | "attacking" | "hit" | "dying">("idle");
+  const [removed, setRemoved] = useState(false);
   
   // Projectile management
   const [projectiles, setProjectiles] = useState<{
@@ -70,147 +79,93 @@ export function Enemy({ type, position, onDeath }: EnemyProps) {
     config: { tension: 100, friction: 15 },
   }));
   
-  // Get player position on each frame
-  useFrame(({ camera }) => {
-    if (isDead) return;
-    
-    const playerPosition = new Vector3().setFromMatrixPosition(camera.matrixWorld);
-    setTarget(playerPosition);
-    
-    // Calculate distance to player
-    const currentPosition = new Vector3(
-      springs.position.get()[0],
-      springs.position.get()[1],
-      springs.position.get()[2]
-    );
-    const distanceToPlayer = currentPosition.distanceTo(playerPosition);
-    
-    // Attack logic based on distance
-    const attackProps = ENEMY_ATTACK[type];
-    if (distanceToPlayer < attackProps.range) {
-      setAnimationState("attacking");
+  // Update enemy position and behavior
+  useFrame((_, delta) => {
+    if (isDead || !enemyRef.current) return;
+
+    // Update enemy position if rigid body exists
+    if (rigidBodyRef.current) {
+      const enemyPos = rigidBodyRef.current.translation();
       
-      // Face player
-      if (enemyRef.current) {
-        const lookAtVector = new Vector3(playerPosition.x, currentPosition.y, playerPosition.z);
-        const enemyQuat = new Quaternion();
-        const upVector = new Vector3(0, 1, 0);
-        const forwardVector = new Vector3().subVectors(lookAtVector, currentPosition).normalize();
-        
-        enemyQuat.setFromUnitVectors(new Vector3(0, 0, 1), forwardVector);
-        enemyRef.current.quaternion.slerp(enemyQuat, 0.1);
+      // Only update model position if it exists
+      if (modelRef.current) {
+        modelRef.current.position.set(enemyPos.x, enemyPos.y, enemyPos.z);
       }
       
-      // Attack with cooldown
-      const now = Date.now();
-      if (now - lastAttackTime > attackProps.rate) {
-        setLastAttackTime(now);
+      // Get player position from enemy store
+      const player = enemyStore.getPlayer();
+      if (player) {
+        playerPosition.current.set(player.x, player.y, player.z);
+        playerPositionTrackingRef.current.copy(playerPosition.current);
+      }
+      
+      // Calculate distance to player
+      const currentPosition = new Vector3(enemyPos.x, enemyPos.y, enemyPos.z);
+      const distanceToPlayer = currentPosition.distanceTo(playerPosition.current);
+      
+      // Calculate direction to player (ignoring y)
+      const directionToPlayer = new Vector3()
+        .subVectors(playerPosition.current, currentPosition)
+        .setY(0) // Keep movement on the horizontal plane
+        .normalize();
+      
+      // Calculate target rotation (face the player)
+      const targetRotation = Math.atan2(directionToPlayer.x, directionToPlayer.z);
+      
+      // Update the model rotation
+      if (modelRef.current) {
+        const currentRotation = modelRef.current.rotation.y;
+        // Smooth rotation (lerp between current and target)
+        const newRotation = currentRotation + (targetRotation - currentRotation) * Math.min(delta * turnSpeed, 1);
+        modelRef.current.rotation.y = newRotation;
+      }
+      
+      // Update rigid body velocity based on distance to player
+      const speed = ENEMY_SPEED[type] * delta * 10; // Scale by delta and a factor
+      
+      // Handle movement based on distance
+      if (distanceToPlayer < 3) {
+        // Too close - back away slightly
+        rigidBodyRef.current.setLinvel({
+          x: -directionToPlayer.x * speed * 0.5,
+          y: 0,
+          z: -directionToPlayer.z * speed * 0.5
+        }, true);
+        setAnimationState("walking");
+      } else if (distanceToPlayer > 15) {
+        // Too far - move faster toward player
+        rigidBodyRef.current.setLinvel({
+          x: directionToPlayer.x * speed * 1.5,
+          y: 0,
+          z: directionToPlayer.z * speed * 1.5
+        }, true);
+        setAnimationState("walking");
+      } else if (distanceToPlayer > 5) {
+        // Standard follow behavior
+        rigidBodyRef.current.setLinvel({
+          x: directionToPlayer.x * speed,
+          y: 0,
+          z: directionToPlayer.z * speed
+        }, true);
+        setAnimationState("walking");
+      } else {
+        // In attack range - stop and attack
+        rigidBodyRef.current.setLinvel({
+          x: 0,
+          y: 0,
+          z: 0
+        }, true);
+        setAnimationState("attacking");
         
-        // Shoot projectile at player
-        if (distanceToPlayer > 2) { // Only shoot if player is not too close
-          shootProjectile(playerPosition, currentPosition);
-        } else {
-          // Melee attack if very close
-          console.log(`${type} melee attacks player!`);
-          // Would trigger direct damage to player here
+        // Attempt to shoot if enough time has passed
+        const currentTime = Date.now();
+        if (currentTime - lastShootAttempt.current > shootCooldown.current) {
+          lastShootAttempt.current = currentTime;
+          shootProjectile(playerPosition.current, currentPosition);
         }
-      }
-      
-      // Move away if player is too close (maintain distance)
-      if (distanceToPlayer < 5) {
-        direction.current.subVectors(currentPosition, playerPosition).normalize();
-        velocity.current.set(
-          direction.current.x * ENEMY_SPEED[type] * 0.5,
-          0,
-          direction.current.z * ENEMY_SPEED[type] * 0.5
-        );
-        
-        api.start({
-          position: [
-            currentPosition.x + velocity.current.x * 0.01,
-            position[1],
-            currentPosition.z + velocity.current.z * 0.01
-          ]
-        });
-      }
-    } else {
-      // Move towards player if outside attack range
-      setAnimationState("walking");
-      
-      direction.current.subVectors(playerPosition, currentPosition).normalize();
-      velocity.current.set(
-        direction.current.x * ENEMY_SPEED[type],
-        0, // Keep y movement at 0 to stay on ground
-        direction.current.z * ENEMY_SPEED[type]
-      );
-      
-      // Update position with spring physics
-      api.start({
-        position: [
-          currentPosition.x + velocity.current.x * 0.01,
-          position[1], // Keep original y position
-          currentPosition.z + velocity.current.z * 0.01
-        ]
-      });
-      
-      // Calculate rotation to face player
-      if (enemyRef.current) {
-        const lookAtVector = new Vector3(playerPosition.x, currentPosition.y, playerPosition.z);
-        const enemyQuat = new Quaternion();
-        const upVector = new Vector3(0, 1, 0);
-        const forwardVector = new Vector3().subVectors(lookAtVector, currentPosition).normalize();
-        
-        enemyQuat.setFromUnitVectors(new Vector3(0, 0, 1), forwardVector);
-        enemyRef.current.quaternion.slerp(enemyQuat, 0.1);
       }
     }
   });
-  
-  // Shoot projectile at player
-  const shootProjectile = (playerPos: Vector3, currentPos: Vector3) => {
-    // Calculate direction vector to player with slight randomness for inaccuracy
-    const shootDir = new Vector3()
-      .subVectors(playerPos, currentPos)
-      .normalize()
-      .add(new Vector3(
-        (Math.random() - 0.5) * 0.1,
-        (Math.random() - 0.5) * 0.1 + 0.05, // Slight upward bias
-        (Math.random() - 0.5) * 0.1
-      ))
-      .normalize();
-    
-    // Create projectile
-    const projectileId = `proj-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    
-    // Slightly offset position to avoid collision with enemy
-    const startPosition: [number, number, number] = [
-      currentPos.x + shootDir.x * 0.6,
-      currentPos.y + 1, // Shoot from "head" height
-      currentPos.z + shootDir.z * 0.6
-    ];
-    
-    setProjectiles(prev => [
-      ...prev, 
-      { id: projectileId, position: startPosition, direction: shootDir }
-    ]);
-    
-    // Visual effect for shooting
-    api.start({
-      scale: [1.1, 1.1, 1.1],
-      config: { tension: 300, friction: 10, duration: 100 },
-      onRest: () => {
-        api.start({
-          scale: [1, 1, 1],
-          config: { tension: 100, friction: 15 }
-        });
-      }
-    });
-  };
-  
-  // Handle projectile hit
-  const handleProjectileHit = (id: string) => {
-    setProjectiles(prev => prev.filter(proj => proj.id !== id));
-  };
   
   // Handle taking damage
   const takeDamage = (amount: number) => {
@@ -218,64 +173,92 @@ export function Enemy({ type, position, onDeath }: EnemyProps) {
     
     setHealth((prev) => {
       const newHealth = prev - amount;
-      
       if (newHealth <= 0) {
         die();
         return 0;
       }
-      
-      // Visual feedback for hit
-      api.start({
-        color: "#ff0000",
-        scale: [1.2, 1.2, 1.2],
-        config: { tension: 300, friction: 10 },
-        onRest: () => {
-          api.start({
-            color: "#ffffff",
-            scale: [1, 1, 1],
-            config: { tension: 100, friction: 15 }
-          });
-        }
-      });
-      
       setAnimationState("hit");
-      setTimeout(() => {
-        if (!isDead) setAnimationState("idle");
-      }, 300);
-      
       return newHealth;
     });
   };
   
-  // Handle death
+  // Death handling
   const die = () => {
     setIsDead(true);
-    setAnimationState("dying");
+    setAnimationState("death");
     
-    // Trigger death animation
-    api.start({
-      position: [springs.position.get()[0], position[1] - 0.5, springs.position.get()[2]],
-      scale: [1.2, 0.2, 1.2],
-      color: "#550000",
-      config: { tension: 100, friction: 20 },
-      onRest: () => {
-        // Notify parent of death for potential spawning logic
-        if (onDeath) {
-          const finalPos: [number, number, number] = [
-            springs.position.get()[0],
-            position[1],
-            springs.position.get()[2]
-          ];
-          onDeath(finalPos);
-        }
-        
-        // Fade out and remove after death animation
-        api.start({
-          scale: [0, 0, 0],
-          config: { tension: 100, friction: 15, duration: 1000 }
-        });
-      }
+    // Change collider to represent fallen enemy
+    if (rigidBodyRef.current) {
+      // Disable the current collider
+      rigidBodyRef.current.setEnabled(false);
+    }
+    
+    // Notify parent of death for potential item drops or score
+    if (onDeath) {
+      onDeath(position);
+    }
+    
+    // Remove from scene after death animation
+    setTimeout(() => {
+      setRemoved(true);
+    }, 3000);
+  };
+  
+  // Handle collisions
+  const handleCollision = (e: any) => {
+    // If we collide with a player bullet or other projectile
+    if (e.other.rigidBodyObject?.userData?.type === "projectile") {
+      // Extract damage from the projectile
+      const damage = e.other.rigidBodyObject?.userData?.damage || 10;
+      takeDamage(damage);
+    }
+  };
+  
+  // Shoot projectile at player
+  const shootProjectile = (targetPosition: Vector3, sourcePosition: Vector3) => {
+    // Don't shoot if dead
+    if (isDead) return;
+    
+    // Calculate direction vector from enemy to player
+    const direction = new Vector3()
+      .subVectors(targetPosition, sourcePosition)
+      .normalize();
+    
+    // Add a slight vertical offset to projectile start position
+    const projectileStart = sourcePosition.clone().add(new Vector3(0, 0.5, 0));
+    
+    // Get weapon properties based on enemy type
+    const attackProps = ENEMY_ATTACK[type];
+    
+    // Play attack animation
+    setAnimationState("attacking");
+    
+    // Get velocity from direction and speed
+    const velocity: [number, number, number] = [
+      direction.x * attackProps.speed,
+      direction.y * attackProps.speed,
+      direction.z * attackProps.speed
+    ];
+    
+    // Spawn projectile through enemy store
+    enemyStore.addProjectile({
+      position: [projectileStart.x, projectileStart.y, projectileStart.z],
+      velocity: velocity,
+      damage: attackProps.damage,
+      type: type
     });
+    
+    // Reset attack animation after delay
+    setTimeout(() => {
+      if (!isDead) {
+        setAnimationState("idle");
+      }
+    }, 500);
+  };
+  
+  // Handle projectile hit
+  const handleProjectileHit = (id: string) => {
+    setProjectiles(prev => prev.filter(proj => proj.id !== id));
   };
   
   const enemyStore = useEnemyStore();
@@ -347,182 +330,87 @@ export function Enemy({ type, position, onDeath }: EnemyProps) {
   }, [enemyRef.current]);
 
   return (
-    <>
-      <a.group
-        ref={enemyRef}
-        position={springs.position}
-        scale={springs.scale}
+    <group ref={enemyRef} position={position} name={`enemy-${enemyId}`}>
+      <RigidBody 
+        ref={rigidBodyRef}
+        type="dynamic"
+        colliders={false}
+        mass={80}
+        lockRotations
+        enabledRotations={[false, false, false]}
+        userData={{ type: "enemy", takeDamage, damage: type === 'commander' ? 20 : 10 }}
+        onCollisionEnter={handleCollision}
+        friction={0.5}
       >
-        <RigidBody
-          ref={rigidBodyRef}
-          type="dynamic"
-          canSleep={false}
-          lockRotations
-          enabled={!isDead}
-          name="enemy"
-        >
-          <CuboidCollider args={[0.5, 1, 0.5]} />
-          
-          {/* Enhanced enemy models based on type */}
-          {type === "grunt" && (
-            <a.group castShadow>
-              {/* Body */}
-              <mesh position={[0, 0, 0]}>
-                <capsuleGeometry args={[0.4, 1, 8, 16]} />
-                <a.meshStandardMaterial color={springs.color} roughness={0.7} />
-              </mesh>
-              
-              {/* Head */}
-              <mesh position={[0, 0.9, 0]}>
-                <sphereGeometry args={[0.3, 16, 16]} />
-                <a.meshStandardMaterial color={springs.color} roughness={0.5} />
-              </mesh>
-              
-              {/* Arms */}
-              <mesh position={[0.5, 0.2, 0]} rotation={[0, 0, -Math.PI/4]}>
-                <capsuleGeometry args={[0.1, 0.6, 8, 8]} />
-                <a.meshStandardMaterial color={springs.color} roughness={0.7} />
-              </mesh>
-              <mesh position={[-0.5, 0.2, 0]} rotation={[0, 0, Math.PI/4]}>
-                <capsuleGeometry args={[0.1, 0.6, 8, 8]} />
-                <a.meshStandardMaterial color={springs.color} roughness={0.7} />
-              </mesh>
-              
-              {/* Legs */}
-              <mesh position={[0.2, -0.9, 0]} rotation={[0, 0, 0.2]}>
-                <capsuleGeometry args={[0.15, 0.7, 8, 8]} />
-                <a.meshStandardMaterial color={springs.color} roughness={0.7} />
-              </mesh>
-              <mesh position={[-0.2, -0.9, 0]} rotation={[0, 0, -0.2]}>
-                <capsuleGeometry args={[0.15, 0.7, 8, 8]} />
-                <a.meshStandardMaterial color={springs.color} roughness={0.7} />
-              </mesh>
-            </a.group>
-          )}
-          
-          {type === "soldier" && (
-            <a.group castShadow>
-              {/* Body */}
-              <mesh position={[0, 0, 0]}>
-                <capsuleGeometry args={[0.45, 1.2, 8, 16]} />
-                <a.meshStandardMaterial color={springs.color} roughness={0.5} />
-              </mesh>
-              
-              {/* Head */}
-              <mesh position={[0, 1.0, 0]}>
-                <sphereGeometry args={[0.35, 16, 16]} />
-                <a.meshStandardMaterial color={springs.color} roughness={0.5} />
-              </mesh>
-              
-              {/* Helmet */}
-              <mesh position={[0, 1.0, 0.05]}>
-                <cylinderGeometry args={[0.4, 0.45, 0.3, 16]} />
-                <meshStandardMaterial color="#333333" roughness={0.8} />
-              </mesh>
-              
-              {/* Arms */}
-              <mesh position={[0.55, 0.2, 0]} rotation={[0, 0, -Math.PI/4]}>
-                <capsuleGeometry args={[0.15, 0.7, 8, 8]} />
-                <a.meshStandardMaterial color={springs.color} roughness={0.5} />
-              </mesh>
-              <mesh position={[-0.55, 0.2, 0]} rotation={[0, 0, Math.PI/4]}>
-                <capsuleGeometry args={[0.15, 0.7, 8, 8]} />
-                <a.meshStandardMaterial color={springs.color} roughness={0.5} />
-              </mesh>
-              
-              {/* Legs */}
-              <mesh position={[0.25, -0.95, 0]} rotation={[0, 0, 0.2]}>
-                <capsuleGeometry args={[0.18, 0.8, 8, 8]} />
-                <a.meshStandardMaterial color={springs.color} roughness={0.5} />
-              </mesh>
-              <mesh position={[-0.25, -0.95, 0]} rotation={[0, 0, -0.2]}>
-                <capsuleGeometry args={[0.18, 0.8, 8, 8]} />
-                <a.meshStandardMaterial color={springs.color} roughness={0.5} />
-              </mesh>
-              
-              {/* Weapon */}
-              <mesh position={[0.7, 0, 0.3]} rotation={[0, 0, 0]}>
-                <boxGeometry args={[0.1, 0.25, 0.8]} />
-                <meshStandardMaterial color="#222222" roughness={0.8} />
-              </mesh>
-            </a.group>
-          )}
-          
-          {type === "commander" && (
-            <a.group castShadow>
-              {/* Body */}
-              <mesh position={[0, 0, 0]}>
-                <capsuleGeometry args={[0.5, 1.3, 8, 16]} />
-                <a.meshStandardMaterial color={springs.color} roughness={0.4} />
-              </mesh>
-              
-              {/* Head */}
-              <mesh position={[0, 1.1, 0]}>
-                <sphereGeometry args={[0.4, 16, 16]} />
-                <a.meshStandardMaterial color={springs.color} roughness={0.4} />
-              </mesh>
-              
-              {/* Helmet/Visor */}
-              <mesh position={[0, 1.1, 0.2]}>
-                <boxGeometry args={[0.8, 0.4, 0.3]} />
-                <meshStandardMaterial color="#333333" roughness={0.8} />
-              </mesh>
-              
-              {/* Shoulder Armor */}
-              <mesh position={[0.6, 0.5, 0]}>
-                <sphereGeometry args={[0.3, 16, 16]} />
-                <meshStandardMaterial color="#444444" roughness={0.4} />
-              </mesh>
-              <mesh position={[-0.6, 0.5, 0]}>
-                <sphereGeometry args={[0.3, 16, 16]} />
-                <meshStandardMaterial color="#444444" roughness={0.4} />
-              </mesh>
-              
-              {/* Arms */}
-              <mesh position={[0.6, 0.1, 0]} rotation={[0, 0, -Math.PI/6]}>
-                <capsuleGeometry args={[0.2, 0.8, 8, 8]} />
-                <a.meshStandardMaterial color={springs.color} roughness={0.4} />
-              </mesh>
-              <mesh position={[-0.6, 0.1, 0]} rotation={[0, 0, Math.PI/6]}>
-                <capsuleGeometry args={[0.2, 0.8, 8, 8]} />
-                <a.meshStandardMaterial color={springs.color} roughness={0.4} />
-              </mesh>
-              
-              {/* Legs */}
-              <mesh position={[0.3, -1.0, 0]} rotation={[0, 0, 0.1]}>
-                <capsuleGeometry args={[0.2, 0.9, 8, 8]} />
-                <a.meshStandardMaterial color={springs.color} roughness={0.4} />
-              </mesh>
-              <mesh position={[-0.3, -1.0, 0]} rotation={[0, 0, -0.1]}>
-                <capsuleGeometry args={[0.2, 0.9, 8, 8]} />
-                <a.meshStandardMaterial color={springs.color} roughness={0.4} />
-              </mesh>
-              
-              {/* Weapon - advanced */}
-              <mesh position={[0.8, 0, 0.4]} rotation={[0, 0, 0]}>
-                <boxGeometry args={[0.15, 0.3, 1.0]} />
-                <meshStandardMaterial color="#222222" roughness={0.8} />
-              </mesh>
-              <mesh position={[0.8, 0, 0.85]} rotation={[0, 0, 0]}>
-                <cylinderGeometry args={[0.1, 0.15, 0.3, 8]} />
-                <meshStandardMaterial color="#111111" metalness={0.8} roughness={0.2} />
-              </mesh>
-            </a.group>
-          )}
-          
-          {/* Health bar above enemy */}
-          <group position={[0, 2.5, 0]}>
-            <mesh>
-              <boxGeometry args={[1.2, 0.2, 0.1]} />
-              <meshBasicMaterial color="#333333" />
+        {/* Main enemy collider - use capsule for humanoid shape */}
+        <CapsuleCollider args={[0.5, 0.7]} position={[0, 0.9, 0]} />
+        
+        {/* Group for the animated model */}
+        <group ref={modelRef} scale={1.0} position={[0, 0, 0]} rotation={[0, 0, 0]}>
+          {/* Simple enemy model */}
+          <group>
+            {/* Body */}
+            <mesh castShadow position={[0, 0.9, 0]}>
+              <capsuleGeometry args={[0.5, 0.7, 8, 8]} />
+              <meshStandardMaterial 
+                color={
+                  type === 'grunt' ? '#884400' :
+                  type === 'soldier' ? '#446688' :
+                  '#884466'
+                } 
+              />
             </mesh>
-            <mesh position={[(health / ENEMY_HEALTH[type] - 1) * 0.6, 0, 0.05]}>
-              <boxGeometry args={[1.2 * (health / ENEMY_HEALTH[type]), 0.15, 0.1]} />
-              <meshBasicMaterial color={health > ENEMY_HEALTH[type] * 0.3 ? "#00ff00" : "#ff0000"} />
+            
+            {/* Head */}
+            <mesh castShadow position={[0, 1.8, 0]}>
+              <sphereGeometry args={[0.35, 16, 16]} />
+              <meshStandardMaterial 
+                color={
+                  type === 'grunt' ? '#aa5500' :
+                  type === 'soldier' ? '#5577aa' :
+                  '#aa5577'
+                } 
+              />
+            </mesh>
+            
+            {/* Arms */}
+            <mesh castShadow position={[0.7, 0.9, 0]}>
+              <capsuleGeometry args={[0.2, 0.7, 8, 8]} />
+              <meshStandardMaterial 
+                color={
+                  type === 'grunt' ? '#773300' :
+                  type === 'soldier' ? '#335577' :
+                  '#773355'
+                } 
+              />
+            </mesh>
+            <mesh castShadow position={[-0.7, 0.9, 0]}>
+              <capsuleGeometry args={[0.2, 0.7, 8, 8]} />
+              <meshStandardMaterial 
+                color={
+                  type === 'grunt' ? '#773300' :
+                  type === 'soldier' ? '#335577' :
+                  '#773355'
+                } 
+              />
+            </mesh>
+            
+            {/* Weapon (for soldier and commander) */}
+            {(type === 'soldier' || type === 'commander') && (
+              <mesh castShadow position={[0.7, 0.9, 0.5]}>
+                <boxGeometry args={[0.1, 0.1, 0.8]} />
+                <meshStandardMaterial color="#111111" />
+              </mesh>
+            )}
+            
+            {/* Health bar - scales with health percentage */}
+            <mesh position={[0, 2.3, 0]}>
+              <boxGeometry args={[1.2 * (health / 100), 0.1, 0.1]} />
+              <meshBasicMaterial color={health > 50 ? 'green' : health > 25 ? 'yellow' : 'red'} />
             </mesh>
           </group>
-        </RigidBody>
-      </a.group>
+        </group>
+      </RigidBody>
       
       {/* Render projectiles */}
       {projectiles.map(projectile => (
@@ -530,11 +418,11 @@ export function Enemy({ type, position, onDeath }: EnemyProps) {
           key={projectile.id}
           position={projectile.position}
           direction={projectile.direction}
-          speed={ENEMY_ATTACK[type].projectileSpeed}
+          speed={ENEMY_ATTACK[type].speed}
           damage={ENEMY_ATTACK[type].damage}
           onHit={() => handleProjectileHit(projectile.id)}
         />
       ))}
-    </>
+    </group>
   );
 }
